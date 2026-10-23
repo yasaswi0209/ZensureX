@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
-
+from sqlalchemy import text
+from app.db.session import engine
 from app.db.session import engine, Base
 import app.db.base  # noqa: F401  (registers all models)
 from app.db.schema import ensure_schema
@@ -59,3 +60,7 @@ app.include_router(settings_router)
 @app.get("/")
 def root():
     return {"message": "Backend running 🚀"}
+@app.on_event("startup")
+def add_place_column():
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS place VARCHAR"))
