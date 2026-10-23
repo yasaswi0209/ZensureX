@@ -42,6 +42,44 @@ function avatarColor(name) {
   return AVATAR_COLORS[sum % AVATAR_COLORS.length];
 }
 
+// Turns coordinates into a readable area name (e.g. "Adyar"). Returns "" on any failure.
+async function lookupPlace(lat, lon) {
+  try {
+    const r = await axios.get("https://nominatim.openstreetmap.org/reverse", {
+      params: { format: "jsonv2", lat, lon, zoom: 14 },
+      timeout: 5000
+    });
+    const a = r.data.address || {};
+    return a.suburb || a.city_district || a.neighbourhood || a.city || a.town || a.village || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+// Reads the browser GPS and saves it on the server. Always resolves, even if denied or failed.
+function sendLocation(token) {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve();
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        const place = await lookupPlace(lat, lon);
+        axios
+          .post(
+            `${API_BASE}/pool/location`,
+            { lat, lon, place },
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+          .catch(() => {})
+          .finally(resolve);
+      },
+      () => resolve(), // permission denied or unavailable: keep the old city pool
+      { timeout: 8000, maximumAge: 600000 }
+    );
+  });
+}
+
 function PoolDetails() {
 
   const [search, setSearch] = useState("");
@@ -54,30 +92,14 @@ function PoolDetails() {
   } catch (e) {
     me = "";
   }
-function sendLocation(token) {
-  return new Promise(resolve => {
-    if (!navigator.geolocation) return resolve();
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        axios
-          .post(
-            `${API_BASE}/pool/location`,
-            { lat: pos.coords.latitude, lon: pos.coords.longitude },
-            { headers: { Authorization: `Bearer ${token}` } }
-          )
-          .catch(() => {})
-          .finally(resolve);
-      },
-      () => resolve(), // permission denied or unavailable: fall back to the text location
-      { timeout: 8000, maximumAge: 600000 }
-    );
-  });
-}
+
   function load() {
     const token = localStorage.getItem("token");
     setError("");
-    axios
-      .get(`${API_BASE}/pool/me`, { headers: { Authorization: `Bearer ${token}` } })
+    sendLocation(token)
+      .then(() =>
+        axios.get(`${API_BASE}/pool/me`, { headers: { Authorization: `Bearer ${token}` } })
+      )
       .then(res => setPool(res.data))
       .catch(() => setError("Could not load the pool. Check your connection and try again."));
   }
