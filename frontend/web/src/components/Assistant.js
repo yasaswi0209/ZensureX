@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+// Shared assistant logic. The chat UI lives in pages/AssistantPage.js
+// and the floating robot lives in components/AssistantLauncher.js.
 
-const QUICK = [
+export const QUICK = [
   "Is it safe to work now?",
   "Will it rain soon?",
   "Which plan should I take?",
@@ -28,7 +28,7 @@ function planPrices(base) {
 }
 
 // Answers come from the worker's live data, not from canned numbers.
-function answer(question, { data, pool, userName }) {
+export function answer(question, { data, pool, userName }) {
   const q = question.toLowerCase().trim();
 
   const temp = data?.weather?.temp;
@@ -148,9 +148,9 @@ function answer(question, { data, pool, userName }) {
   };
 }
 
-function Robot() {
+export function Robot({ width = 84, height = 110 }) {
   return (
-    <svg viewBox="0 0 100 130" width="84" height="110" aria-hidden="true">
+    <svg viewBox="0 0 100 130" width={width} height={height} aria-hidden="true">
       <ellipse cx="50" cy="125" rx="26" ry="5" fill="rgba(15,23,42,.2)" />
       <rect x="38" y="98" width="8" height="20" rx="4" fill="#475569" />
       <rect x="54" y="98" width="8" height="20" rx="4" fill="#475569" />
@@ -173,122 +173,5 @@ function Robot() {
       <line x1="50" y1="14" x2="50" y2="6" stroke="#94a3b8" strokeWidth="3" />
       <circle className="zx-bot-led" cx="50" cy="4" r="4" fill="#ef4444" />
     </svg>
-  );
-}
-
-export default function Assistant({ data, pool, userName }) {
-  const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
-  const [hint, setHint] = useState(false);
-  const [typing, setTyping] = useState(false);
-  const [text, setText] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      from: "bot",
-      text: `Hi${userName ? ` ${userName}` : ""}! I am your ZensureX assistant. Ask me anything about your cover, the weather or payouts.`
-    }
-  ]);
-  const endRef = useRef(null);
-
-  // Wave hello once per session
-  useEffect(() => {
-    if (sessionStorage.getItem("zx_bot_hint")) return undefined;
-    const show = setTimeout(() => setHint(true), 2500);
-    const hide = setTimeout(() => setHint(false), 9000);
-    sessionStorage.setItem("zx_bot_hint", "1");
-    return () => {
-      clearTimeout(show);
-      clearTimeout(hide);
-    };
-  }, []);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, typing, open]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = e => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
-
-  function ask(question) {
-    const q = question.trim();
-    if (!q || typing) return;
-    setMessages(m => [...m, { from: "me", text: q }]);
-    setText("");
-    setTyping(true);
-    setTimeout(() => {
-      setMessages(m => [...m, { from: "bot", ...answer(q, { data, pool, userName }) }]);
-      setTyping(false);
-    }, 500);
-  }
-
-  return (
-    <div className="zx-bot">
-
-      {open && (
-        <div className="zx-chat" role="dialog" aria-label="ZensureX assistant">
-          <div className="zx-chat-head">
-            <div>
-              <b>ZensureX assistant</b>
-              <span>Answers from your live data</span>
-            </div>
-            <button className="zx-chat-close" onClick={() => setOpen(false)} aria-label="Close assistant">✕</button>
-          </div>
-
-          <div className="zx-chat-body">
-            {messages.map((m, i) => (
-              <div key={i} className={`zx-msg ${m.from}`}>
-                <p>{m.text}</p>
-                {m.action && (
-                  <button className="zx-msg-action" onClick={() => navigate(m.action.to)}>
-                    {m.action.label}
-                  </button>
-                )}
-              </div>
-            ))}
-            {typing && (
-              <div className="zx-msg bot">
-                <p className="zx-typing"><span /><span /><span /></p>
-              </div>
-            )}
-            <div ref={endRef} />
-          </div>
-
-          <div className="zx-qchips">
-            {QUICK.map(s => (
-              <button key={s} className="zx-qchip" onClick={() => ask(s)}>{s}</button>
-            ))}
-          </div>
-
-          <div className="zx-chat-input">
-            <input
-              value={text}
-              placeholder="Ask a question"
-              aria-label="Ask a question"
-              onChange={e => setText(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && ask(text)}
-            />
-            <button onClick={() => ask(text)} disabled={!text.trim() || typing}>Send</button>
-          </div>
-        </div>
-      )}
-
-      {!open && hint && <div className="zx-bot-hint">Hi! Need help? 👋</div>}
-
-      <button
-        className="zx-bot-btn"
-        onClick={() => {
-          setOpen(o => !o);
-          setHint(false);
-        }}
-        aria-label={open ? "Close assistant" : "Open assistant"}
-      >
-        <Robot />
-      </button>
-
-    </div>
   );
 }
