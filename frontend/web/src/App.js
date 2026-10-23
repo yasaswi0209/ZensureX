@@ -5,6 +5,8 @@ Route,
 Navigate,
 useLocation
 } from "react-router-dom";
+import ForgotPassword from "./pages/ForgotPassword";
+
 import { AnimatePresence } from "framer-motion";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -41,7 +43,7 @@ return(
 <Routes location={location} key={location.pathname}>
 
 <Route path="/" element={<Home/>} />
-
+<Route path="/forgot-password" element={<ForgotPassword />} />
 <Route path="/login" element={<Login/>} />
 <Route path="/payment-setup" element={<PaymentSetup />} />
 <Route path="/signup" element={<Signup/>} />
