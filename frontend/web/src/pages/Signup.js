@@ -3,6 +3,9 @@ import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
+const API = "https://zensurex-backend.onrender.com";
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 function Signup(){
 
   const navigate = useNavigate();
@@ -15,46 +18,93 @@ function Signup(){
   const [location,setLocation] = useState("");
   const [income,setIncome] = useState("");
 
- async function handleSignup(){
+  const [emailError, setEmailError] = useState("");
+  const [checking, setChecking] = useState(false);
 
-  if(!name || !email || !password || !platform || !location || !income){
-    setMessage("Please fill all fields ❌");
-    return;
-  }
+  // Returns true if the email is valid and not already registered
+  async function checkEmail(){
+    const value = email.trim().toLowerCase();
+    if(!value) return false;
 
-  try{
+    if(!EMAIL_REGEX.test(value)){
+      setEmailError("Enter a valid email address ❌");
+      return false;
+    }
 
-    await axios.post(
-      "https://zensurex-backend.onrender.com/auth/signup",
-      {
-        name,
-        email,
-        password,
-        platform,
-        location,
-        weekly_income: Number(income)
+    try{
+      setChecking(true);
+      const res = await axios.get(`${API}/auth/check-email`, {
+        params: { email: value }
+      });
+
+      if(res.data.exists){
+        setEmailError("This email is already registered ❌");
+        return false;
       }
-    );
 
-    // ✅ SUCCESS MESSAGE
-    setMessage("Signup Successful 🎉");
+      setEmailError("");
+      return true;
 
-    // 🔥 REDIRECT AFTER DELAY
-    setTimeout(() => {
-      navigate("/login");
-    }, 1500);
-
-  }catch(err){
-    console.error("Signup error:", err);
-
-    if(err.response){
-      setMessage(err.response.data.detail || "Signup failed ❌");
-    }else{
-      setMessage("Server not reachable ❌");
+    }catch(err){
+      // If the check itself fails, don't block signup. The backend checks again.
+      setEmailError("");
+      return true;
+    }finally{
+      setChecking(false);
     }
   }
 
-}
+  async function handleSignup(){
+
+    if(!name || !email || !password || !platform || !location || !income){
+      setMessage("Please fill all fields ❌");
+      return;
+    }
+
+    if(password.length < 6){
+      setMessage("Password must be at least 6 characters ❌");
+      return;
+    }
+
+    const emailOk = await checkEmail();
+    if(!emailOk){
+      setMessage("Please fix the email ❌");
+      return;
+    }
+
+    try{
+
+      await axios.post(`${API}/auth/signup`, {
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        password,
+        platform,
+        location: location.trim(),
+        weekly_income: Number(income)
+      });
+
+      // ✅ SUCCESS MESSAGE
+      setMessage("Signup Successful 🎉");
+
+      // 🔥 REDIRECT AFTER DELAY
+      setTimeout(() => {
+        navigate("/login");
+      }, 1500);
+
+    }catch(err){
+      console.error("Signup error:", err);
+
+      if(err.response){
+        const detail = err.response.data?.detail;
+        setMessage(
+          typeof detail === "string" ? `${detail} ❌` : "Signup failed ❌"
+        );
+      }else{
+        setMessage("Server not reachable ❌");
+      }
+    }
+
+  }
 
   return(
 
@@ -109,15 +159,34 @@ function Signup(){
 
           <input
             className="input"
+            type="email"
             placeholder="Email"
             value={email}
-            onChange={(e)=>setEmail(e.target.value)}
+            onChange={(e)=>{
+              setEmail(e.target.value);
+              setEmailError("");
+              setMessage("");
+            }}
+            onBlur={checkEmail}
+            style={emailError ? { borderColor: "#d8000c" } : undefined}
           />
+
+          {checking && (
+            <p style={{ fontSize: "13px", margin: "-6px 0 8px" }} className="muted">
+              Checking email...
+            </p>
+          )}
+
+          {emailError && (
+            <p style={{ color: "#d8000c", fontSize: "13px", margin: "-6px 0 8px" }}>
+              {emailError}
+            </p>
+          )}
 
           <input
             className="input"
             type="password"
-            placeholder="Password"
+            placeholder="Password (min 6 characters)"
             value={password}
             onChange={(e)=>setPassword(e.target.value)}
           />
@@ -146,20 +215,21 @@ function Signup(){
             value={income}
             onChange={(e)=>setIncome(e.target.value)}
           />
-          {message && (
-  <div style={{
-    background: message.includes("Successful") ? "#e6ffe6" : "#ffe6e6",
-    color: message.includes("Successful") ? "#2e7d32" : "#d8000c",
-    padding: "10px",
-    borderRadius: "6px",
-    marginBottom: "10px",
-    textAlign: "center"
-  }}>
-    {message}
-  </div>
-)}
 
-          <button type="submit" className="btn-primary">
+          {message && (
+            <div style={{
+              background: message.includes("Successful") ? "#e6ffe6" : "#ffe6e6",
+              color: message.includes("Successful") ? "#2e7d32" : "#d8000c",
+              padding: "10px",
+              borderRadius: "6px",
+              marginBottom: "10px",
+              textAlign: "center"
+            }}>
+              {message}
+            </div>
+          )}
+
+          <button type="submit" className="btn-primary" disabled={checking}>
             Signup
           </button>
 
