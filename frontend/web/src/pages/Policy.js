@@ -8,21 +8,6 @@ const API_BASE = "https://zensurex-backend.onrender.com";
 
 const RISK_COLOR = { LOW: "green", MEDIUM: "#f59e0b", HIGH: "#ef4444" };
 
-// Same thresholds as the backend (rain in mm/h)
-function liveLevel(temp, rainMm, aqi) {
-  let level = "LOW";
-  if (rainMm > 2.5 || temp > 35 || aqi > 150) level = "MEDIUM";
-  if (
-    rainMm > 7.5 ||
-    temp > 40 ||
-    aqi > 200 ||
-    (rainMm > 2.5 && (temp > 35 || aqi > 150))
-  ) {
-    level = "HIGH";
-  }
-  return level;
-}
-
 function Policy() {
 
   const navigate = useNavigate();
@@ -34,10 +19,12 @@ function Policy() {
   const [risk, setRisk] = useState("");
   const [temp, setTemp] = useState(0);
   const [aqi, setAqi] = useState(0);
-  const [mlPrice, setMlPrice] = useState(0);
+  const [price, setPrice] = useState(0);
   const [reason, setReason] = useState("");
   const [rainMm, setRainMm] = useState(0);
-  const [futureRisk, setFutureRisk] = useState("");
+  const [forecast, setForecast] = useState(null);
+  const [outlookRisk, setOutlookRisk] = useState("");
+  const [recommendedPlan, setRecommendedPlan] = useState("");
   const [locationSource, setLocationSource] = useState("saved_city");
   const [dataFallback, setDataFallback] = useState(false);
 
@@ -48,7 +35,6 @@ function Policy() {
   const [lockDate, setLockDate] = useState(null);
   const [toast, setToast] = useState(null);
 
-  // makes sure the auto claim is sent at most once per page load
   const claimFired = useRef(false);
 
   function showToast(message, type = "success") {
@@ -97,15 +83,15 @@ function Policy() {
       setTemp(t);
       setAqi(a);
       setRainMm(rm);
-      setMlPrice(data.ml_price || 20);
+      setPrice(data.price || data.ml_price || 20);
       setReason(data.reason || "Normal conditions");
+      setForecast(data.forecast || null);
+      setOutlookRisk(data.outlook_risk || data.risk || "LOW");
+      setRecommendedPlan(data.recommended_plan || "Basic");
       setLocationSource(data.location_source || "saved_city");
       setDataFallback(Boolean(data.data_fallback));
 
-      // Estimate from current conditions (not a true forecast)
-      setFutureRisk(liveLevel(t, rm, a));
-
-      // Auto claim only on real HIGH conditions and real (non-fallback) data
+      // Auto claim only on real HIGH conditions NOW (not forecast) and real data
       const severe = rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
       if (severe && !data.data_fallback && !claimFired.current) {
         claimFired.current = true;
@@ -124,7 +110,6 @@ function Policy() {
           navigate("/login");
           return;
         }
-        // GPS request failed: retry once with the saved city
         if (params && params.lat !== undefined) {
           load({});
           return;
@@ -141,7 +126,7 @@ function Policy() {
 
     navigator.geolocation.getCurrentPosition(
       pos => load({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      () => load({}),            // permission denied or timed out
+      () => load({}),
       { timeout: 8000 }
     );
 
@@ -159,6 +144,10 @@ function Policy() {
         });
 
         const data = res.data;
+
+        if (data?.plan && typeof setPlan === "function") {
+          setPlan(data.plan);
+        }
 
         if (data?.locked_until) {
           const lock = new Date(data.locked_until);
@@ -194,6 +183,7 @@ function Policy() {
 
       if (diff <= 0) {
         setCountdown("Unlocked ✅");
+        setIsLocked(false);
         clearInterval(interval);
         return;
       }
@@ -212,22 +202,14 @@ function Policy() {
   }, [isLocked, lockDate]);
 
   useEffect(() => {
-    if (risk === "HIGH") {
-      showToast("⚠️ High Risk! Choose Premium Plan", "error");
+    if (outlookRisk === "HIGH" && !isLocked) {
+      showToast("⚠️ High risk ahead! Consider the Premium plan", "error");
     }
-  }, [risk]);
-
-  function getRecommendedPlan() {
-    if (risk === "HIGH") return "Premium";
-    if (risk === "MEDIUM") return "Moderate";
-    return "Basic";
-  }
-
-  const recommendedPlan = getRecommendedPlan();
+  }, [outlookRisk, isLocked]);
 
   // Prices always go up: Basic < Moderate < Premium
   const plans = useMemo(() => {
-    const base = mlPrice > 0 ? mlPrice : 20;
+    const base = price > 0 ? price : 20;
     const moderate = Math.round(base * 1.25);
     const premium = Math.max(Math.round(base * 1.5), moderate + 5);
 
@@ -251,17 +233,25 @@ function Policy() {
         features: ["Rain + heat cover", "Accident protection", "Demand drop cover", "Priority payout", "Peak bonus"]
       }
     ];
-  }, [mlPrice]);
+  }, [price]);
 
+  // Locked: show the user's plan. Not locked: pre-select the recommended plan.
   useEffect(() => {
-    if (recommendedPlan) {
-      const autoPlan = plans.find(p => p.name === recommendedPlan);
-      setSelectedPlan(autoPlan);
+    if (isLocked && plan) {
+      const mine = plans.find(p => p.name === plan);
+      if (mine) setSelectedPlan(mine);
+      return;
     }
-  }, [recommendedPlan, plans]);
+    if (recommendedPlan) {
+      const auto = plans.find(p => p.name === recommendedPlan);
+      if (auto) setSelectedPlan(auto);
+    }
+  }, [recommendedPlan, plans, isLocked, plan]);
 
   // CONFIRM PLAN
   async function handleConfirm() {
+
+    if (isLocked) return;
 
     if (!selectedPlan) {
       showToast("Please select a plan ⚠️", "error");
@@ -306,6 +296,16 @@ function Policy() {
   const reasonLines = reason ? reason.split("|") : [];
   const usingGps = locationSource === "gps";
 
+  const rows = [
+    { label: "Now", temp, rain: rainMm, pop: null, level: risk },
+    ...(forecast
+      ? [
+          { label: "Next 3h", temp: forecast.h3.temp, rain: forecast.h3.rain_mm, pop: forecast.h3.pop, level: forecast.h3.risk },
+          { label: "Next 6h", temp: forecast.h6.temp, rain: forecast.h6.rain_mm, pop: forecast.h6.pop, level: forecast.h6.risk }
+        ]
+      : [])
+  ];
+
   return (
     <section className="scene active">
       <div className="policy-container">
@@ -349,7 +349,7 @@ function Policy() {
             borderRadius: "10px",
             fontWeight: "bold"
           }}>
-            🔒 {lockMessage}
+            🔒 {plan ? `${plan} plan active. ` : ""}{lockMessage}
             <br />
             ⏳ Unlocks in: {countdown}
           </div>
@@ -364,17 +364,32 @@ function Policy() {
             {usingGps && city ? ` (profile city: ${city})` : ""}
           </p>
 
-          <p>
-            🌡 {Number(temp).toFixed(1)}°C | 🌧 {Number(rainMm).toFixed(1)} mm/h | 🌫 AQI {aqi}
-          </p>
+          <p>🌫 AQI {aqi}</p>
 
-          <p style={{ color: RISK_COLOR[risk] || "gray", fontWeight: "bold" }}>
-            ⚠️ Risk Level: {risk}
-          </p>
+          {/* NOW + FORECAST */}
+          <div style={{ display: "inline-block", textAlign: "left" }}>
+            {rows.map(r => (
+              <p key={r.label} style={{ margin: "4px 0" }}>
+                <b>{r.label}:</b> 🌡 {Number(r.temp).toFixed(1)}°C • 🌧 {Number(r.rain).toFixed(1)} mm/h
+                {r.pop !== null ? ` (${r.pop}% chance)` : ""} •{" "}
+                <span style={{ color: RISK_COLOR[r.level] || "gray", fontWeight: "bold" }}>
+                  {r.level}
+                </span>
+              </p>
+            ))}
+          </div>
 
-          <p style={{ color: RISK_COLOR[futureRisk] || "gray", fontWeight: "bold" }}>
-            🔮 Next 6h Risk (estimate): {futureRisk}
-          </p>
+          {!forecast && risk && (
+            <p style={{ color: "#f59e0b" }}>
+              ⚠ Forecast unavailable, plan is based on current conditions only.
+            </p>
+          )}
+
+          {outlookRisk && (
+            <p style={{ color: RISK_COLOR[outlookRisk] || "gray", fontWeight: "bold", marginTop: "8px" }}>
+              🔮 Outlook (worst of next 6h): {outlookRisk}
+            </p>
+          )}
 
           {dataFallback && (
             <p style={{ color: "#f59e0b" }}>
@@ -389,24 +404,20 @@ function Policy() {
           {reasonLines.map((r, i) => (
             <p key={i} style={{ color: "gray" }}>• {r.trim()}</p>
           ))}
-          {risk && liveLevel(temp, rainMm, aqi) === "LOW" && risk !== "LOW" && (
-            <p style={{ color: "gray" }}>
-              • Current conditions are normal. The {risk} level comes from this
-              area's historical risk pattern.
-            </p>
-          )}
         </div>
 
         {/* PLANS */}
         <div className="pricing-grid">
           {plans.map(p => {
             const active = selectedPlan?.name === p.name;
-            const isRecommended = recommendedPlan === p.name;
+            const isRecommended = !isLocked && recommendedPlan === p.name;
+            const isMine = isLocked && plan === p.name;
 
             return (
               <motion.div
                 key={p.name}
                 className={`price-card ${active ? "active glow" : ""} ${isRecommended ? "highlight" : ""} ${isLocked ? "glow-locked" : ""}`}
+                style={isLocked && !isMine ? { opacity: 0.5 } : undefined}
                 whileHover={{ scale: isLocked ? 1 : 1.05 }}
                 onClick={() => {
                   if (!isLocked) {
@@ -426,7 +437,9 @@ function Policy() {
                 </ul>
 
                 <button className="btn" disabled={active || isLocked}>
-                  {isLocked ? "Locked 🔒" : active ? "Selected" : "Select Plan"}
+                  {isLocked
+                    ? (isMine ? "Your plan 🔒" : "Unavailable")
+                    : active ? "Selected" : "Select Plan"}
                 </button>
               </motion.div>
             );
