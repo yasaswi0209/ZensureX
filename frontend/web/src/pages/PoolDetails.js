@@ -9,38 +9,30 @@ import {
 } from "recharts";
 
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import axios from "axios";
 
 
-/* SAMPLE DATA */
+const API_BASE = "https://zensurex-backend.onrender.com";
 
-const workers = [
-
-{ name:"Ravi", city:"Hyderabad", area:"Nampally", contribution:30, payout:0 },
-
-{ name:"Amit", city:"Hyderabad", area:"Ameerpet", contribution:20, payout:310 },
-
-{ name:"Priya", city:"Hyderabad", area:"Kukatpally", contribution:50, payout:0 },
-
-{ name:"Rahul", city:"Hyderabad", area:"Dilsukhnagar", contribution:30, payout:120 },
-
-{ name:"Sneha", city:"Hyderabad", area:"Begumpet", contribution:40, payout:0 }
-
-];
-
-
-const payoutTrend = [
-  { month: "Jan", contribution: 12000, payout: 8000 },
-  { month: "Feb", contribution: 15000, payout: 6000 },
-  { month: "Mar", contribution: 18000, payout: 9000 },
-  { month: "Apr", contribution: 17000, payout: 4000 }
-];
-
+const inr = n => Number(n || 0).toLocaleString("en-IN");
 
 
 function PoolDetails(){
 
   const [search,setSearch] = useState("");
+  const [pool,setPool] = useState(null);
+  const [error,setError] = useState("");
+
+  useEffect(()=>{
+    const token = localStorage.getItem("token");
+    axios.get(`${API_BASE}/pool/me`, { headers:{ Authorization:`Bearer ${token}` } })
+      .then(res => setPool(res.data))
+      .catch(() => setError("Could not load the pool. Try again."));
+  },[]);
+
+  const workers = pool?.members || [];
+  const payoutTrend = pool?.trend || [];
 
   const filteredWorkers = workers.filter(w =>
     w.name.toLowerCase().includes(search.toLowerCase())
@@ -108,11 +100,11 @@ Pool Balance
 </p>
 
 <h3 className="highlight-green">
-₹1,50,000
+{pool ? `₹${inr(pool.balance)}` : "..."}
 </h3>
 
 <p className="muted">
-community protection fund
+{pool ? pool.zone_label : "community protection fund"}
 </p>
 
 </motion.div>
@@ -129,11 +121,11 @@ Workers
 </p>
 
 <h3>
-14,250
+{pool ? pool.member_count : "..."}
 </h3>
 
 <p className="muted">
-active members
+active members in your zone
 </p>
 
 </motion.div>
@@ -146,15 +138,15 @@ whileHover={{scale:1.05}}
 >
 
 <p className="dsc-label">
-Trust Score
+Premiums Collected
 </p>
 
 <h3 className="highlight-green">
-97%
+{pool ? `₹${inr(pool.total_premiums)}` : "..."}
 </h3>
 
 <p className="muted">
-AI verified pool
+{pool ? `plus ₹${inr(pool.seed_funds)} seed funds` : "from active plans"}
 </p>
 
 </motion.div>
@@ -171,11 +163,11 @@ Total Payout
 </p>
 
 <h3 className="highlight-red">
-₹32,000
+{pool ? `₹${inr(pool.total_payouts)}` : "..."}
 </h3>
 
 <p className="muted">
-released instantly
+paid out from this pool
 </p>
 
 </motion.div>
@@ -194,7 +186,7 @@ animate={{opacity:1}}
 
 <h3 className="dp-title">
 
-Contribution vs Payout Trend
+Contribution vs Payout (last 4 weeks)
 
 </h3>
 
@@ -205,7 +197,7 @@ Contribution vs Payout Trend
 
 <CartesianGrid strokeDasharray="3 3"/>
 
-<XAxis dataKey="month"/>
+<XAxis dataKey="period"/>
 
 <YAxis/>
 
@@ -302,7 +294,7 @@ onChange={(e)=>setSearch(e.target.value)}
 
 <div>Name</div>
 
-<div>Area</div>
+<div>Plan</div>
 
 <div>Contribution</div>
 
@@ -312,10 +304,16 @@ onChange={(e)=>setSearch(e.target.value)}
 
 
 
-{filteredWorkers.map(w=>(
+{error && <p className="muted">{error}</p>}
+
+{pool && filteredWorkers.length === 0 && (
+<p className="muted">No active members yet. Members appear when they confirm a plan.</p>
+)}
+
+{filteredWorkers.map((w,i)=>(
 
 <motion.div
-key={w.name}
+key={`${w.name}-${i}`}
 className="worker-card modern-card grid-worker"
 whileHover={{scale:1.02}}
 >
@@ -326,16 +324,16 @@ whileHover={{scale:1.02}}
 
 <h3>{w.name}</h3>
 
-<p className="muted">{w.city}</p>
+<p className="muted">{pool?.zone_label}</p>
 
 </div>
 
 
-{/* AREA COLUMN */}
+{/* PLAN COLUMN */}
 
 <div className="area-badge">
 
-📍 {w.area}
+🛡 {w.plan}
 
 </div>
 
@@ -344,7 +342,7 @@ whileHover={{scale:1.02}}
 
 <div className="contribution">
 
-+₹{w.contribution}
++₹{inr(w.contribution)}/wk
 
 </div>
 
@@ -357,7 +355,7 @@ whileHover={{scale:1.02}}
 
 <span className="paid">
 
-₹{w.payout}
+₹{inr(w.payout)}
 
 </span>
 
