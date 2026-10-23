@@ -2,29 +2,24 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { useAuth } from "../pages/AuthContext";
 
 const BASE_URL = "https://zensurex-backend.onrender.com";
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-function ForgotPassword() {
+function Login() {
 
   const navigate = useNavigate();
+  const { login } = useAuth();
 
-  const [step, setStep] = useState(1);
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const isSuccess = message.includes("successful") || message.includes("sent");
+  async function handleLogin() {
 
-  async function sendCode() {
-    const value = email.trim().toLowerCase();
-
-    if (!EMAIL_REGEX.test(value)) {
-      setMessage("Enter a valid email address ❌");
+    if (!email || !password) {
+      setMessage("Please enter email and password ❌");
       return;
     }
 
@@ -32,56 +27,58 @@ function ForgotPassword() {
       setLoading(true);
       setMessage("");
 
-      await axios.post(`${BASE_URL}/auth/forgot-password`, { email: value });
+      // 🔥 Prepare form data
+      const formData = new URLSearchParams();
+      formData.append("username", email);
+      formData.append("password", password);
 
-      setEmail(value);
-      setStep(2);
-      setMessage("Code sent. Check your inbox 📧");
+      // 🔥 Login API
+      const res = await axios.post(
+        `${BASE_URL}/auth/login`,
+        formData,
+        {
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded"
+          }
+        }
+      );
 
-    } catch (err) {
-      const detail = err.response?.data?.detail;
-      setMessage(typeof detail === "string" ? `${detail} ❌` : "Server not reachable ❌");
-    } finally {
-      setLoading(false);
-    }
-  }
+      // 🚨 Token safety check
+      if (!res.data.access_token) {
+        setMessage("Login failed ❌");
+        return;
+      }
 
-  async function resetPassword() {
+      let userData = { name: "User", email };
 
-    if (otp.trim().length !== 6) {
-      setMessage("Enter the 6-digit code ❌");
-      return;
-    }
+      // 🔥 Fetch real user data (safe)
+      try {
+        const userRes = await axios.get(
+          `${BASE_URL}/auth/me`,
+          {
+            headers: {
+              Authorization: `Bearer ${res.data.access_token}`
+            }
+          }
+        );
+        userData = userRes.data;
+      } catch {
+        console.warn("User fetch failed, using fallback");
+      }
 
-    if (newPassword.length < 6) {
-      setMessage("Password must be at least 6 characters ❌");
-      return;
-    }
+      // 🔥 Save in context
+      login(userData, res.data.access_token);
 
-    if (newPassword !== confirmPassword) {
-      setMessage("Passwords do not match ❌");
-      return;
-    }
+      // ✅ Success message
+      setMessage("Login successful 🎉");
 
-    try {
-      setLoading(true);
-      setMessage("");
-
-      await axios.post(`${BASE_URL}/auth/reset-password`, {
-        email,
-        otp: otp.trim(),
-        new_password: newPassword
-      });
-
-      setMessage("Password reset successful 🎉");
-
+      // 🚀 Redirect
       setTimeout(() => {
-        navigate("/login");
-      }, 1500);
+        navigate("/dashboard");
+      }, 800);
 
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      setMessage(typeof detail === "string" ? `${detail} ❌` : "Reset failed ❌");
+      setMessage("Invalid credentials ❌");
     } finally {
       setLoading(false);
     }
@@ -93,10 +90,10 @@ function ForgotPassword() {
 
         {/* LEFT */}
         <div className="auth-left">
-          <h1>Forgot your password?</h1>
+          <h1>Protect your income with AI</h1>
           <p>
-            No worries. We'll email you a code
-            so you can get back to protecting your income.
+            Insurance built for delivery workers.
+            Instant protection against disruption.
           </p>
 
           <img
@@ -112,17 +109,14 @@ function ForgotPassword() {
           animate={{ opacity: 1, y: 0 }}
         >
 
-          <h2 className="auth-title">Reset Password</h2>
-          <p className="muted">
-            {step === 1
-              ? "Enter your registered email"
-              : `Enter the code sent to ${email}`}
-          </p>
+          <h2 className="auth-title">Welcome Back</h2>
+          <p className="muted">Login to continue</p>
 
+          {/* 🔥 MESSAGE */}
           {message && (
             <div style={{
-              background: isSuccess ? "#e6ffe6" : "#ffe6e6",
-              color: isSuccess ? "#2e7d32" : "#d8000c",
+              background: message.includes("successful") ? "#e6ffe6" : "#ffe6e6",
+              color: message.includes("successful") ? "#2e7d32" : "#d8000c",
               padding: "10px",
               borderRadius: "6px",
               marginBottom: "10px",
@@ -132,80 +126,47 @@ function ForgotPassword() {
             </div>
           )}
 
-          {step === 1 && (
-            <>
-              <input
-                className="input"
-                type="email"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
+          <input
+            className="input"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
-              <button
-                className="btn-primary"
-                onClick={sendCode}
-                disabled={loading}
-              >
-                {loading ? "Sending..." : "Send Code"}
-              </button>
-            </>
-          )}
+          <input
+            className="input"
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+          />
 
-          {step === 2 && (
-            <>
-              <input
-                className="input"
-                placeholder="6-digit code"
-                maxLength={6}
-                inputMode="numeric"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
-              />
+          <button
+            className="btn-primary"
+            onClick={handleLogin}
+            disabled={loading}
+          >
+            {loading ? "Logging in..." : "Login"}
+          </button>
 
-              <input
-                className="input"
-                type="password"
-                placeholder="New password (min 6 characters)"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-              />
-
-              <input
-                className="input"
-                type="password"
-                placeholder="Confirm new password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-              />
-
-              <button
-                className="btn-primary"
-                onClick={resetPassword}
-                disabled={loading}
-              >
-                {loading ? "Resetting..." : "Reset Password"}
-              </button>
-
-              <p className="muted">
-                Didn't get it?{" "}
-                <span
-                  className="link"
-                  onClick={() => { setStep(1); setOtp(""); setMessage(""); }}
-                >
-                  Resend code
-                </span>
-              </p>
-            </>
-          )}
-
+          {/* 🆕 FORGOT PASSWORD */}
           <p className="muted">
-            Remember your password?{" "}
             <span
               className="link"
-              onClick={() => navigate("/login")}
+              onClick={() => navigate("/forgot-password")}
             >
-              Back to login
+              Forgot password?
+            </span>
+          </p>
+
+          <p className="muted">
+            New user?{" "}
+            <span
+              className="link"
+              onClick={() => navigate("/signup")}
+            >
+              Create account
             </span>
           </p>
 
@@ -216,4 +177,4 @@ function ForgotPassword() {
   );
 }
 
-export default ForgotPassword;
+export default Login;
