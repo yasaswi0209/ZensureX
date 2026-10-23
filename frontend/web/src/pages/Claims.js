@@ -1,18 +1,242 @@
+
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import useLiveRisk, { API_BASE } from "../components/useLiveRisk";
 import "../styles/zensurex-ui.css";
 
-// Same limits the Policy page uses to decide a payout is due
 const LIMITS = { rain: 7.5, heat: 45, pollution: 250 };
 
 const OPTIONS = [
-  { value: "rain", label: "🌧 Heavy rain" },
-  { value: "pollution", label: "🌫 High pollution" },
-  { value: "heat", label: "🔥 Extreme heat" },
-  { value: "curfew", label: "🚫 Curfew" }
+  { value: "rain", icon: "🌧", name: "Heavy rain" },
+  { value: "pollution", icon: "🌫", name: "High pollution" },
+  { value: "heat", icon: "🔥", name: "Extreme heat" },
+  { value: "curfew", icon: "🚫", name: "Curfew" }
 ];
+
+const styles = {
+  page: {
+    paddingTop: 96,
+    maxWidth: 1200,
+    margin: "0 auto",
+    paddingLeft: 20,
+    paddingRight: 20,
+    paddingBottom: 40,
+    color: "var(--zx-ink, #0f172a)"
+  },
+  heading: {
+    fontSize: 28,
+    fontWeight: 800,
+    letterSpacing: "-.02em",
+    margin: 0
+  },
+  muted: {
+    color: "var(--zx-muted, #64748b)",
+    fontSize: 13,
+    lineHeight: 1.5
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
+    gap: 20,
+    alignItems: "start"
+  },
+  column: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 20,
+    minWidth: 0
+  },
+  card: {
+    background: "var(--zx-surface, #fff)",
+    border: "1px solid var(--zx-line, #e2e8f0)",
+    borderRadius: 18,
+    padding: 22,
+    boxShadow: "0 4px 18px rgba(15,23,42,.04)"
+  },
+  cardHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 20,
+    flexWrap: "wrap"
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: 800,
+    margin: "0 0 5px"
+  },
+  cardSub: {
+    fontSize: 12.5,
+    color: "var(--zx-muted, #64748b)",
+    margin: 0,
+    lineHeight: 1.5
+  },
+  button: {
+    border: "1px solid var(--zx-line, #e2e8f0)",
+    background: "var(--zx-surface, #fff)",
+    color: "var(--zx-ink, #0f172a)",
+    borderRadius: 10,
+    padding: "9px 13px",
+    fontWeight: 700,
+    fontSize: 12.5,
+    cursor: "pointer"
+  },
+  meter: { marginBottom: 18 },
+  meterTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 8,
+    fontSize: 13,
+    flexWrap: "wrap"
+  },
+  bar: {
+    width: "100%",
+    height: 8,
+    borderRadius: 999,
+    overflow: "hidden",
+    background: "var(--zx-line, #e2e8f0)"
+  },
+  steps: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    margin: "4px 0 24px"
+  },
+  step: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12,
+    fontWeight: 700,
+    color: "var(--zx-muted, #64748b)",
+    minWidth: 0
+  },
+  stepCircle: {
+    width: 26,
+    height: 26,
+    minWidth: 26,
+    borderRadius: "50%",
+    display: "grid",
+    placeItems: "center",
+    fontSize: 12,
+    fontWeight: 800,
+    border: "2px solid var(--zx-line, #e2e8f0)"
+  },
+  pickLabel: {
+    display: "block",
+    marginBottom: 12,
+    fontSize: 13,
+    fontWeight: 700,
+    color: "var(--zx-muted, #64748b)"
+  },
+  types: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+    gap: 12,
+    marginBottom: 16
+  },
+  type: {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "14px 12px",
+    textAlign: "left",
+    borderRadius: 14,
+    border: "2px solid var(--zx-line, #e2e8f0)",
+    background: "var(--zx-surface, #fff)",
+    color: "var(--zx-ink, #0f172a)",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    minWidth: 0
+  },
+  note: {
+    margin: "0 0 12px",
+    padding: "10px 12px",
+    borderRadius: 10,
+    fontSize: 13,
+    lineHeight: 1.5,
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    color: "#92400e"
+  },
+  payto: {
+    margin: "0 0 12px",
+    padding: "10px 12px",
+    borderRadius: 10,
+    fontSize: 13,
+    background: "var(--zx-soft, #f8fafc)",
+    border: "1px solid var(--zx-line, #e2e8f0)"
+  },
+  cta: {
+    width: "100%",
+    marginTop: 4,
+    padding: "13px 16px",
+    border: "none",
+    borderRadius: 12,
+    background: "var(--zx-brand, #4f46e5)",
+    color: "#fff",
+    fontWeight: 800,
+    fontSize: 14,
+    cursor: "pointer"
+  },
+  empty: {
+    minHeight: 150,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    textAlign: "center",
+    padding: 16
+  },
+  banner: {
+    padding: 13,
+    borderRadius: 12,
+    marginBottom: 18,
+    fontSize: 13,
+    lineHeight: 1.5,
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap"
+  },
+  result: {
+    padding: 18,
+    borderRadius: 16,
+    fontSize: 14,
+    lineHeight: 1.5,
+    overflowWrap: "anywhere"
+  },
+  resultGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 130px), 1fr))",
+    gap: 10,
+    marginTop: 12
+  },
+  resultItem: {
+    padding: 10,
+    borderRadius: 12,
+    background: "rgba(255,255,255,.7)",
+    minWidth: 0,
+    overflowWrap: "anywhere"
+  },
+  history: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    alignItems: "center",
+    gap: 8,
+    padding: "13px 0",
+    borderTop: "1px solid var(--zx-line, #e2e8f0)",
+    fontSize: 13
+  }
+};
 
 function meterColor(ratio) {
   if (ratio >= 1) return "#ef4444";
@@ -28,16 +252,15 @@ function scoreLabel(score) {
 }
 
 function Claims() {
-
   const navigate = useNavigate();
   const { data, loading, error, refresh } = useLiveRisk();
 
   const [selected, setSelected] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | verifying | approved | rejected
+  const [status, setStatus] = useState("idle");
   const [result, setResult] = useState(null);
   const [recent, setRecent] = useState([]);
   const [recentLoading, setRecentLoading] = useState(true);
-  const [upi, setUpi] = useState(null); // null = loading, "" = not set
+  const [upi, setUpi] = useState(null);
 
   const token = localStorage.getItem("token");
   const headers = { Authorization: `Bearer ${token}` };
@@ -47,13 +270,44 @@ function Claims() {
   const aqi = data?.aqi ?? 0;
 
   const meters = [
-    { key: "rain", icon: "🌧", label: "Heavy rain", value: rainMm, limit: LIMITS.rain, unit: "mm/h", digits: 1 },
-    { key: "heat", icon: "🔥", label: "Extreme heat", value: temp, limit: LIMITS.heat, unit: "°C", digits: 0 },
-    { key: "pollution", icon: "🌫", label: "High pollution", value: aqi, limit: LIMITS.pollution, unit: "AQI", digits: 0 }
+    {
+      key: "rain",
+      icon: "🌧",
+      label: "Heavy rain",
+      value: rainMm,
+      limit: LIMITS.rain,
+      unit: "mm/h",
+      digits: 1
+    },
+    {
+      key: "heat",
+      icon: "🔥",
+      label: "Extreme heat",
+      value: temp,
+      limit: LIMITS.heat,
+      unit: "°C",
+      digits: 0
+    },
+    {
+      key: "pollution",
+      icon: "🌫",
+      label: "High pollution",
+      value: aqi,
+      limit: LIMITS.pollution,
+      unit: "AQI",
+      digits: 0
+    }
   ];
-  const triggered = data ? meters.filter(m => m.value > m.limit).map(m => m.key) : [];
 
-  // default to what live data actually shows
+  const triggered = data
+    ? meters.filter(m => m.value > m.limit).map(m => m.key)
+    : [];
+
+  const busy = status === "verifying";
+  const selectedName =
+    OPTIONS.find(o => o.value === selected)?.name || "";
+  const risk = scoreLabel(result?.score);
+
   useEffect(() => {
     if (!data || selected) return;
     setSelected(triggered[0] || "rain");
@@ -70,20 +324,28 @@ function Claims() {
 
   useEffect(() => {
     loadRecent();
+
     axios
       .get(`${API_BASE}/settings/profile/me`, { headers })
       .then(res => setUpi(res.data.upi_id || ""))
       .catch(() => setUpi(""));
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function submit() {
-    if (!selected || status === "verifying") return;
+    if (!selected || busy) return;
+
     setStatus("verifying");
     setResult(null);
 
     try {
-      const res = await axios.post(`${API_BASE}/claims/auto`, { trigger: selected }, { headers });
+      const res = await axios.post(
+        `${API_BASE}/claims/auto`,
+        { trigger: selected },
+        { headers }
+      );
+
       const d = res.data;
 
       setResult({
@@ -94,14 +356,19 @@ function Claims() {
         fraud: d.fraud_reason || "",
         score: d.risk_score
       });
+
       setStatus(d.status === "approved" ? "approved" : "rejected");
       loadRecent();
     } catch (err) {
       console.error(err);
+
       setResult({
-        reason: err.response?.data?.detail || "The server could not process the claim. Try again.",
+        reason:
+          err.response?.data?.detail ||
+          "The server could not process the claim. Try again.",
         amount: 0
       });
+
       setStatus("rejected");
     }
   }
@@ -116,76 +383,142 @@ function Claims() {
       `Time: ${result?.payment?.time || ""}`,
       `Transaction ID: ${result?.payment?.id || ""}`
     ];
-    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/plain"
+    });
+
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
+
     a.href = url;
     a.download = "claim_receipt.txt";
     a.click();
+
     window.URL.revokeObjectURL(url);
   }
 
-  const selectedLabel = OPTIONS.find(o => o.value === selected)?.label || "";
   let warning = "";
+
   if (data && selected) {
-    if (selected === "curfew") warning = "Curfews cannot be checked from live data, so this claim needs a manual review.";
-    else if (!triggered.includes(selected)) warning = "Live data does not show this disruption right now. The claim may be rejected.";
+    if (selected === "curfew") {
+      warning =
+        "Curfews cannot be checked from live data, so this claim needs a manual review.";
+    } else if (!triggered.includes(selected)) {
+      warning =
+        "Live data does not show this disruption right now. The claim may be rejected.";
+    }
   }
 
-  const stepIndex = status === "verifying" ? 1 : status === "approved" ? 2 : 0;
-  const risk = scoreLabel(result?.score);
+  const stepIndex =
+    status === "verifying" ? 1 : status === "approved" ? 2 : 0;
+
+  const steps = ["Submit", "AI review", "Payout"];
 
   return (
     <section className="scene active">
-      <div className="zx-page" style={{ paddingTop: 96 }}>
-
-        <div className="zx-rise" style={{ "--i": 0, marginBottom: 20 }}>
-          <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-.02em", margin: 0 }}>Claims</h1>
-          <p className="zx-muted" style={{ marginTop: 4, fontSize: 14 }}>
-            Payouts trigger from live conditions in {data?.city || localStorage.getItem("city") || "your area"}.
+      <div className="zx-page zx-claims" style={styles.page}>
+        <div style={{ marginBottom: 22 }}>
+          <h1 style={styles.heading}>Claims</h1>
+          <p style={{ ...styles.muted, marginTop: 5, fontSize: 14 }}>
+            Payouts trigger from live conditions in{" "}
+            {data?.city || localStorage.getItem("city") || "your area"}.
           </p>
         </div>
 
         {error && (
-          <div className="zx-banner zx-banner-danger">
-            <span>⚠️</span><span>{error}</span>
-            <button className="zx-cta" style={{ marginLeft: "auto", marginTop: 0 }} onClick={refresh}>Try again</button>
+          <div
+            style={{
+              ...styles.banner,
+              background: "#fef2f2",
+              color: "#991b1b",
+              border: "1px solid #fecaca"
+            }}
+          >
+            <span>⚠️ {error}</span>
+            <button
+              style={{ ...styles.button, marginLeft: "auto" }}
+              onClick={refresh}
+            >
+              Try again
+            </button>
           </div>
         )}
 
-        <div className="zx-grid">
-
-          {/* LEFT */}
-          <div className="zx-col">
-
-            <div className="zx-card zx-rise" style={{ "--i": 1 }}>
-              <div className="zx-card-head">
+        <div style={styles.grid}>
+          {/* LEFT COLUMN */}
+          <div style={styles.column}>
+            {/* Live payout triggers */}
+            <div style={styles.card}>
+              <div style={styles.cardHead}>
                 <div>
-                  <h3 className="zx-card-title">Live payout triggers</h3>
-                  <p className="zx-card-sub">A payout is due when a bar reaches its limit.</p>
+                  <h3 style={styles.cardTitle}>Live payout triggers</h3>
+                  <p style={styles.cardSub}>
+                    A payout is due when a bar reaches its limit.
+                  </p>
                 </div>
-                <button className="zx-btn" onClick={refresh} disabled={loading}>{loading ? "Checking..." : "Refresh"}</button>
+
+                <button
+                  style={styles.button}
+                  onClick={refresh}
+                  disabled={loading}
+                >
+                  {loading ? "Checking..." : "↻ Refresh"}
+                </button>
               </div>
 
               {loading && !data ? (
-                <span className="zx-skel" style={{ width: "100%", height: 170 }} />
+                <div
+                  style={{
+                    height: 150,
+                    borderRadius: 12,
+                    background: "var(--zx-soft, #f8fafc)"
+                  }}
+                />
               ) : (
                 meters.map(m => {
                   const ratio = m.limit ? m.value / m.limit : 0;
                   const hit = m.value > m.limit;
+
                   return (
-                    <div key={m.key} className="zx-meter">
-                      <div className="zx-meter-top">
-                        <span>{m.icon} {m.label}</span>
+                    <div key={m.key} style={styles.meter}>
+                      <div style={styles.meterTop}>
                         <span>
-                          <b>{Number(m.value).toFixed(m.digits)}</b> of {m.limit} {m.unit}
-                          {hit && <em className="zx-hit">Triggered</em>}
+                          {m.icon} {m.label}
+                        </span>
+
+                        <span>
+                          <b>{Number(m.value).toFixed(m.digits)}</b>{" "}
+                          of {m.limit} {m.unit}
+
+                          {hit && (
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                padding: "3px 8px",
+                                borderRadius: 999,
+                                background: "#fee2e2",
+                                color: "#b91c1c",
+                                fontSize: 11,
+                                fontWeight: 800,
+                                whiteSpace: "nowrap"
+                              }}
+                            >
+                              Triggered
+                            </span>
+                          )}
                         </span>
                       </div>
-                      <div className="zx-bar" style={{ height: 8 }}>
+
+                      <div style={styles.bar}>
                         <div
-                          className="zx-bar-fill"
-                          style={{ width: `${Math.min(100, ratio * 100)}%`, background: meterColor(ratio) }}
+                          style={{
+                            height: "100%",
+                            width: `${Math.min(100, ratio * 100)}%`,
+                            background: meterColor(ratio),
+                            borderRadius: 999,
+                            transition: "width .8s ease"
+                          }}
                         />
                       </div>
                     </div>
@@ -194,133 +527,355 @@ function Claims() {
               )}
 
               {data && (
-                <p className="zx-muted" style={{ marginTop: 12 }}>
-                  Overall risk: <b style={{ color: data.risk === "HIGH" ? "#ef4444" : data.risk === "MEDIUM" ? "#f59e0b" : "#22c55e" }}>{data.risk}</b>
-                  {triggered.length === 0 ? ". Nothing has reached a payout limit right now." : ""}
+                <p style={{ ...styles.muted, marginTop: 12 }}>
+                  Overall risk:{" "}
+                  <b
+                    style={{
+                      color:
+                        data.risk === "HIGH"
+                          ? "#ef4444"
+                          : data.risk === "MEDIUM"
+                          ? "#f59e0b"
+                          : "#22c55e"
+                    }}
+                  >
+                    {data.risk}
+                  </b>
+
+                  {triggered.length === 0
+                    ? ". Nothing has reached a payout limit right now."
+                    : ""}
                 </p>
               )}
             </div>
 
-            <div className="zx-card zx-rise" style={{ "--i": 2 }}>
-              <div className="zx-card-head">
+            {/* File a claim */}
+            <div style={styles.card}>
+              <div style={styles.cardHead}>
                 <div>
-                  <h3 className="zx-card-title">File a claim</h3>
-                  <p className="zx-card-sub">Confirm the disruption that stopped your work.</p>
+                  <h3 style={styles.cardTitle}>File a claim</h3>
+                  <p style={styles.cardSub}>
+                    Confirm the disruption that stopped your work.
+                  </p>
                 </div>
               </div>
 
-              <div className="zx-steps">
-                {["Submit", "AI review", "Payout"].map((s, i) => (
-                  <div key={s} className={`zx-step ${i <= stepIndex ? "on" : ""}`}>
-                    <span>{i + 1}</span>{s}
-                  </div>
-                ))}
+              <div style={styles.steps}>
+                {steps.map((step, i) => {
+                  const active = i <= stepIndex;
+
+                  return (
+                    <div
+                      key={step}
+                      style={{
+                        ...styles.step,
+                        color: active
+                          ? "var(--zx-ink, #0f172a)"
+                          : "var(--zx-muted, #64748b)"
+                      }}
+                    >
+                      <span
+                        style={{
+                          ...styles.stepCircle,
+                          background: active
+                            ? "var(--zx-brand, #4f46e5)"
+                            : "var(--zx-soft, #f8fafc)",
+                          borderColor: active
+                            ? "var(--zx-brand, #4f46e5)"
+                            : "var(--zx-line, #e2e8f0)",
+                          color: active ? "#fff" : "inherit"
+                        }}
+                      >
+                        {i + 1}
+                      </span>
+                      {step}
+                    </div>
+                  );
+                })}
               </div>
 
-              <div className="zx-field">
-                <label htmlFor="claim-type">Disruption</label>
-                <select id="claim-type" className="zx-select" value={selected} onChange={e => setSelected(e.target.value)}>
-                  {OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+              <span style={styles.pickLabel}>
+                What stopped your work?
+              </span>
+
+              <div
+                style={styles.types}
+                role="radiogroup"
+                aria-label="Claim disruption type"
+              >
+                {OPTIONS.map(o => {
+                  const live = triggered.includes(o.value);
+                  const on = selected === o.value;
+
+                  return (
+                    <button
+                      key={o.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      disabled={busy}
+                      onClick={() => setSelected(o.value)}
+                      style={{
+                        ...styles.type,
+                        borderColor: on
+                          ? "var(--zx-brand, #4f46e5)"
+                          : "var(--zx-line, #e2e8f0)",
+                        background: on
+                          ? "var(--zx-brand-soft, #eef2ff)"
+                          : "var(--zx-surface, #fff)",
+                        boxShadow: on
+                          ? "0 0 0 3px rgba(79,70,229,.12)"
+                          : "none",
+                        opacity: busy ? 0.6 : 1,
+                        cursor: busy ? "not-allowed" : "pointer"
+                      }}
+                    >
+                      <span style={{ fontSize: 22 }}>{o.icon}</span>
+                      <span>{o.name}</span>
+
+                      {live && (
+                        <span
+                          style={{
+                            position: "absolute",
+                            top: -9,
+                            right: 8,
+                            background: "#dc2626",
+                            color: "#fff",
+                            borderRadius: 999,
+                            padding: "3px 7px",
+                            fontSize: 10,
+                            fontWeight: 800
+                          }}
+                        >
+                          Live now
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
 
-              {warning && <p className="zx-note">{warning}</p>}
+              {warning && <p style={styles.note}>{warning}</p>}
 
               {upi === "" && (
-                <p className="zx-note">
+                <p style={styles.note}>
                   Add your UPI ID in your profile so the payout can reach you.{" "}
-                  <button className="zx-link-btn" onClick={() => navigate("/profile")}>Open profile</button>
+                  <button
+                    type="button"
+                    onClick={() => navigate("/profile")}
+                    style={{
+                      border: "none",
+                      padding: 0,
+                      background: "transparent",
+                      color: "#4338ca",
+                      fontWeight: 800,
+                      cursor: "pointer",
+                      textDecoration: "underline"
+                    }}
+                  >
+                    Open profile
+                  </button>
                 </p>
               )}
-              {upi && <p className="zx-muted" style={{ marginBottom: 12 }}>Payout goes to {upi}</p>}
 
-              <button className="zx-cta" style={{ marginTop: 4 }} onClick={submit} disabled={!selected || status === "verifying"}>
-                {status === "verifying" ? "Checking your claim..." : `⚡ Submit ${selectedLabel ? selectedLabel.replace(/^\S+\s/, "").toLowerCase() : ""} claim`}
+              {upi && (
+                <p style={styles.payto}>
+                  Payout goes to <b>{upi}</b>
+                </p>
+              )}
+
+              <button
+                style={{
+                  ...styles.cta,
+                  opacity: busy || !selected ? 0.65 : 1,
+                  cursor: busy || !selected ? "not-allowed" : "pointer"
+                }}
+                onClick={submit}
+                disabled={!selected || busy}
+              >
+                {busy
+                  ? "Checking your claim..."
+                  : `⚡ Submit ${selectedName.toLowerCase()} claim`}
               </button>
             </div>
-
           </div>
 
-          {/* RIGHT */}
-          <div className="zx-col">
-
-            <div className="zx-card zx-rise" style={{ "--i": 3 }}>
-              <div className="zx-card-head">
+          {/* RIGHT COLUMN */}
+          <div style={styles.column}>
+            {/* AI decision */}
+            <div style={styles.card}>
+              <div style={styles.cardHead}>
                 <div>
-                  <h3 className="zx-card-title">AI decision</h3>
-                  <p className="zx-card-sub">Checked against live weather and fraud rules.</p>
+                  <h3 style={styles.cardTitle}>AI decision</h3>
+                  <p style={styles.cardSub}>
+                    Checked against live weather and fraud rules.
+                  </p>
                 </div>
               </div>
 
               {status === "idle" && (
-                <div className="zx-empty" style={{ minHeight: 160 }}>
-                  <span className="zx-empty-icon">🤖</span>
+                <div style={styles.empty}>
+                  <span style={{ fontSize: 34 }}>🤖</span>
                   <b>No claim submitted yet</b>
-                  <span className="zx-muted">Submit a claim and the decision appears here.</span>
+                  <span style={styles.muted}>
+                    Submit a claim and the decision appears here.
+                  </span>
                 </div>
               )}
 
               {status === "verifying" && (
-                <div className="zx-banner zx-banner-warn" style={{ margin: 0 }}>
-                  <span>🤖</span><span>Analysing weather, demand and fraud signals...</span>
+                <div
+                  style={{
+                    ...styles.banner,
+                    margin: 0,
+                    background: "#fffbeb",
+                    border: "1px solid #fde68a",
+                    color: "#92400e"
+                  }}
+                >
+                  🤖 Analysing weather, demand and fraud signals...
                 </div>
               )}
 
               {status === "approved" && result && (
-                <div className="zx-result ok">
-                  <p className="zx-result-tag">⚡ Claim approved</p>
-                  <p className="zx-result-amount">₹{result.amount}</p>
+                <div
+                  style={{
+                    ...styles.result,
+                    background: "#f0fdf4",
+                    border: "1px solid #bbf7d0",
+                    color: "#14532d"
+                  }}
+                >
+                  <p style={{ fontWeight: 800, margin: "0 0 8px" }}>
+                    ⚡ Claim approved
+                  </p>
+
+                  <p
+                    style={{
+                      fontSize: 34,
+                      fontWeight: 800,
+                      letterSpacing: "-.02em",
+                      margin: "0 0 8px"
+                    }}
+                  >
+                    ₹{result.amount}
+                  </p>
+
                   <p>{result.reason}</p>
-                  <div className="zx-result-grid">
-                    <div><span>Payment</span><b>{result.paid ? "✅ Paid" : "❌ Failed"}</b></div>
-                    {risk && <div><span>Fraud risk</span><b>{risk}</b></div>}
-                    {result.fraud && <div><span>Review</span><b>{result.fraud}</b></div>}
-                    {result.payment?.time && <div><span>Time</span><b>{result.payment.time}</b></div>}
-                    {result.payment?.id && <div><span>Transaction ID</span><b>{result.payment.id}</b></div>}
+
+                  <div style={styles.resultGrid}>
+                    <div style={styles.resultItem}>
+                      <span style={styles.muted}>Payment</span>
+                      <b>{result.paid ? "✅ Paid" : "❌ Failed"}</b>
+                    </div>
+
+                    {risk && (
+                      <div style={styles.resultItem}>
+                        <span style={styles.muted}>Fraud risk</span>
+                        <b>{risk}</b>
+                      </div>
+                    )}
+
+                    {result.fraud && (
+                      <div style={styles.resultItem}>
+                        <span style={styles.muted}>Review</span>
+                        <b>{result.fraud}</b>
+                      </div>
+                    )}
+
+                    {result.payment?.time && (
+                      <div style={styles.resultItem}>
+                        <span style={styles.muted}>Time</span>
+                        <b>{result.payment.time}</b>
+                      </div>
+                    )}
+
+                    {result.payment?.id && (
+                      <div style={styles.resultItem}>
+                        <span style={styles.muted}>Transaction ID</span>
+                        <b>{result.payment.id}</b>
+                      </div>
+                    )}
                   </div>
-                  <button className="zx-btn" style={{ marginTop: 14 }} onClick={downloadReceipt}>🧾 Download receipt</button>
+
+                  <button
+                    style={{ ...styles.button, marginTop: 14 }}
+                    onClick={downloadReceipt}
+                  >
+                    🧾 Download receipt
+                  </button>
                 </div>
               )}
 
               {status === "rejected" && result && (
-                <div className="zx-result bad">
-                  <p className="zx-result-tag">❌ Claim not approved</p>
-                  <p>{result.reason || "The claim did not meet the payout rules."}</p>
+                <div
+                  style={{
+                    ...styles.result,
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#7f1d1d"
+                  }}
+                >
+                  <p style={{ fontWeight: 800 }}>
+                    ❌ Claim not approved
+                  </p>
+                  <p>
+                    {result.reason ||
+                      "The claim did not meet the payout rules."}
+                  </p>
                 </div>
               )}
             </div>
 
-            <div className="zx-card zx-rise" style={{ "--i": 4 }}>
-              <div className="zx-card-head">
+            {/* Recent claims */}
+            <div style={styles.card}>
+              <div style={styles.cardHead}>
                 <div>
-                  <h3 className="zx-card-title">Recent claims</h3>
-                  <p className="zx-card-sub">Your last payouts</p>
+                  <h3 style={styles.cardTitle}>Recent claims</h3>
+                  <p style={styles.cardSub}>Your last payouts</p>
                 </div>
               </div>
 
               {recentLoading ? (
-                <span className="zx-skel" style={{ width: "100%", height: 90 }} />
+                <div
+                  style={{
+                    height: 90,
+                    borderRadius: 12,
+                    background: "var(--zx-soft, #f8fafc)"
+                  }}
+                />
               ) : recent.length === 0 ? (
-                <div className="zx-empty" style={{ minHeight: 140 }}>
-                  <span className="zx-empty-icon">🧾</span>
+                <div style={styles.empty}>
+                  <span style={{ fontSize: 34 }}>🧾</span>
                   <b>No claims yet</b>
-                  <span className="zx-muted">Approved claims will be listed here.</span>
+                  <span style={styles.muted}>
+                    Approved claims will be listed here.
+                  </span>
                 </div>
               ) : (
                 recent.map((c, i) => (
-                  <div key={i} className="zx-history">
-                    <span className="zx-history-type">{c.type}</span>
-                    <b>₹{c.amount}</b>
-                    <span className="zx-muted">{c.date}</span>
+                  <div key={i} style={styles.history}>
+                    <span style={{ fontWeight: 600, overflowWrap: "anywhere" }}>
+                      {c.type}
+                      <span
+                        style={{
+                          display: "block",
+                          ...styles.muted,
+                          fontSize: 11,
+                          marginTop: 3
+                        }}
+                      >
+                        {c.date}
+                      </span>
+                    </span>
+
+                    <b style={{ whiteSpace: "nowrap" }}>₹{c.amount}</b>
                   </div>
                 ))
               )}
             </div>
-
           </div>
-
         </div>
-
       </div>
     </section>
   );
