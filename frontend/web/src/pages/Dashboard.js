@@ -10,8 +10,7 @@ import {
 
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { useContext, useEffect, useRef, useState } from "react";
-import { AppContext } from "../utils/AppContext";
+import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 
@@ -30,10 +29,9 @@ const RISK_COLOR = { LOW: "green", MEDIUM: "orange", HIGH: "red" };
 
 function Dashboard() {
 
-  const { plan, premium } = useContext(AppContext);
-
   const navigate = useNavigate();
   const [data, setData] = useState(null);
+  const [pool, setPool] = useState(null);
   const [position, setPosition] = useState([17.385, 78.4867]);
 
   // true once the browser gave us a real GPS position
@@ -51,6 +49,26 @@ function Dashboard() {
   const aqi = data?.aqi ?? 0;
   const usingGps = data?.location_source === "gps";
   const shownCity = data?.city || city || "Your area";
+
+  const inr = n => Number(n || 0).toLocaleString("en-IN");
+
+  // Next payout: real state, not a fixed number
+  let nextPayout = "Loading";
+  let nextPayoutNote = "";
+  if (pool) {
+    if (!pool.plan) {
+      nextPayout = "No active plan";
+      nextPayoutNote = "Choose a plan to be covered";
+    } else if (data?.outlook_risk === "HIGH") {
+      nextPayout = "Payout ready";
+      nextPayoutNote = "High risk ahead, pays on trigger";
+    } else {
+      nextPayout = "No disruption";
+      nextPayoutNote = pool.locked_until
+        ? `Plan active until ${new Date(pool.locked_until).toLocaleDateString()}`
+        : "";
+    }
+  }
 
   const forecast = data?.forecast || null;
   const next6 = forecast?.h6?.risk || "";
@@ -121,6 +139,16 @@ function Dashboard() {
       { timeout: 8000 }
     );
   }, [city, navigate]);
+
+  // POOL, PLAN, COVERAGE: real values from the backend (reload after risk so the GPS zone is saved)
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token || !data) return;
+    axios
+      .get(`${API_BASE}/pool/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(res => setPool(res.data))
+      .catch(err => console.error("Pool load failed", err));
+  }, [data]);
 
   // MAP: use the saved city only when GPS was not used
   useEffect(() => {
@@ -330,17 +358,18 @@ function Dashboard() {
                 onClick={() => navigate("/pool")}
               >
                 <p className="dsc-label">👥 Community Pool</p>
-                <h3 className="card-value">₹1,50,000</h3>
+                <h3 className="card-value">{pool ? `₹${inr(pool.balance)}` : "Loading"}</h3>
+                {pool ? <p className="muted">{pool.member_count} members • {pool.zone_label}</p> : null}
               </motion.div>
 
               <motion.div className="dash-stat-card glass plan-card">
                 <p className="dsc-label">📋 Active Plan</p>
-                <h3 className="card-value">{plan || "No Plan"}</h3>
+                <h3 className="card-value">{pool ? (pool.plan || "No Plan") : "Loading"}</h3>
               </motion.div>
 
               <motion.div className="dash-stat-card glass premium-card">
                 <p className="dsc-label">💰 Weekly Premium</p>
-                <h3 className="card-value">₹{premium || 0}</h3>
+                <h3 className="card-value">{pool ? `₹${inr(pool.premium)}` : "Loading"}</h3>
                 {data?.price ? (
                   <p className="muted">Price today: ₹{data.price}</p>
                 ) : null}
@@ -348,12 +377,13 @@ function Dashboard() {
 
               <motion.div className="dash-stat-card glass">
                 <p className="dsc-label">📊 Coverage Amount</p>
-                <h3 className="card-value">₹7,500</h3>
+                <h3 className="card-value">{pool ? `₹${inr(pool.coverage)}` : "Loading"}</h3>
               </motion.div>
 
               <motion.div className="dash-stat-card glass">
                 <p className="dsc-label">⏱ Next Payout</p>
-                <h3 className="card-value">5 min</h3>
+                <h3 className="card-value">{nextPayout}</h3>
+                {nextPayoutNote ? <p className="muted">{nextPayoutNote}</p> : null}
               </motion.div>
 
             </div>
