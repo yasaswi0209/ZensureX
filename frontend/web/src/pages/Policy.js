@@ -285,7 +285,7 @@ function Policy() {
     } catch (err) {
       console.error(err);
 
-      if (err.response?.status === 400) {
+      if (err.response?.status === 400 || err.response?.status === 409) {
         showToast(err.response.data.detail, "error");
       } else {
         showToast("Upgrade failed ❌", "error");
