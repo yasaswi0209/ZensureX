@@ -1,4 +1,4 @@
-# GigShield AI 🛡️
+# ZensureX🛡️
 
 An AI-powered insurance platform designed for gig workers, built at the Guidewire Hackathon. GigShield connects gig economy workers with dynamic, risk-based insurance coverage using machine learning models trained on financial, environmental, and behavioral data.
 
