@@ -23,6 +23,7 @@ import { AppProvider } from "./utils/AppContext";
 import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
 import PaymentSetup from "./pages/PaymentSetup";
+import AssistantPage from "./pages/AssistantPage";
 function AppWrapper(){
 
 const location = useLocation();
@@ -47,7 +48,7 @@ return(
 <Route path="/settings" element={<Settings />} />
 <Route path="/profile" element={<Profile/>}/>
 {/* PROTECTED */}
-
+<Route path="/assistant" element={<AssistantPage />} />
 <Route path="/dashboard" element={
 <ProtectedRoute>
 <Dashboard/>
