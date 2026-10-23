@@ -23,6 +23,54 @@ from app.services import zone_pool
 router = APIRouter(prefix="/insurance", tags=["Insurance"])
 
 
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
+from typing import Optional
+
+import os
+import razorpay
+from pydantic import BaseModel
+
+from app.db.session import get_db
+from app.schemas.insurance_schema import InsuranceCreate
+from app.api.deps import get_current_user
+from app.services.insurance_service import (
+    create_or_update_policy,
+    get_user_policies,
+    get_latest_policy
+)
+from app.models.insurance import Insurance
+from app.models.insurance_payment import InsurancePayment
+from app.ml.premium_model import calculate_premium
+from app.services.pricing import COVERAGE, plan_prices
+from app.services import zone_pool
+
+# Razorpay configuration
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+
+if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+    print("WARNING: Razorpay credentials are not configured")
+
+razorpay_client = (
+    razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET
+    else None
+)
+
+# Request bodies for payment endpoints
+class CreatePaymentOrder(BaseModel):
+    plan: str
+    quoted_price: Optional[float] = None
+
+class VerifyPayment(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+router = APIRouter(prefix="/insurance", tags=["Insurance"])
+
 # 🔥 CREATE / UPDATE POLICY
 @router.post("/")
 def create_policy(
