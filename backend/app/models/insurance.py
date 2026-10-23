@@ -1,27 +1,18 @@
-from fastapi import APIRouter
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
 
-router = APIRouter()
-
-# ✅ SAFE ROUTE (NO DB)
-@router.get("/insurance/me")
-def get_user_policy():
-    return {
-        "plan": "Basic",
-        "status": "active",
-        "weekly_premium": 23.6
-    }
-
-# ✅ MATCH FRONTEND (IMPORTANT → POST, not GET)
-@router.post("/insurance/upgrade")
-def upgrade_plan(plan: str):
-    return {
-        "message": f"{plan} plan activated 🎉"
-    }
-from sqlalchemy import Column, Integer, String
 from app.db.session import Base
 
+
 class Insurance(Base):
+    """One row per policy purchase. Matches the alembic migration."""
     __tablename__ = "insurance"
 
     id = Column(Integer, primary_key=True, index=True)
-    plan = Column(String)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    plan_name = Column(String, nullable=False)
+    premium = Column(Integer, nullable=False)
+    coverage = Column(Integer, nullable=False)
+    status = Column(String, default="ACTIVE")
+    locked_until = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
