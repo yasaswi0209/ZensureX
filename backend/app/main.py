@@ -15,7 +15,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://guidewire-final.vercel.app",
+        "https://zensurex.vercel.app",
     ],
     allow_credentials=False,
     allow_methods=["*"],
