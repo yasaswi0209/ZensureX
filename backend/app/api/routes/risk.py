@@ -12,6 +12,8 @@ from app.utils.weather_api import (
     get_aqi_data,
     get_weather_by_coords,
     get_aqi_by_coords,
+    get_forecast_by_coords,
+    get_forecast_by_city,
 )
 
 router = APIRouter()
@@ -21,10 +23,12 @@ DEMO_MODE = False
 DEMO_SCENARIO = "HIGH"   # LOW / MEDIUM / HIGH
 
 LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+LEVEL_NAMES = ["LOW", "MEDIUM", "HIGH"]
+PLAN_FOR_LEVEL = {"LOW": "Basic", "MEDIUM": "Moderate", "HIGH": "Premium"}
 
 
 def live_level(temp, rain_mm, aqi):
-    """Minimum risk level implied by current conditions."""
+    """Minimum risk level implied by the given conditions."""
     level = "LOW"
     if rain_mm > 2.5 or temp > 35 or aqi > 150:
         level = "MEDIUM"                      # orange
@@ -36,6 +40,18 @@ def live_level(temp, rain_mm, aqi):
     ):
         level = "HIGH"                        # red
     return level
+
+
+def worst(*levels):
+    return LEVEL_NAMES[max(LEVELS.get(l, 0) for l in levels)]
+
+
+def slot_note(label, slot):
+    parts = []
+    if slot["rain_mm"] > 0:
+        parts.append(f"rain {slot['rain_mm']:.1f} mm/h")
+    parts.append(f"{slot['temp']:.0f}°C")
+    return f"{label}: {', '.join(parts)} → {slot['risk']}"
 
 
 @router.get("/")
@@ -57,13 +73,15 @@ def get_risk(
     pricing_city = "Hyderabad" if DEMO_MODE else saved_city
     display_city = city or pricing_city
 
-    # Live data: GPS if given, else city
-    if lat is not None and lon is not None:
+    # Live data and forecast: GPS if given, else city
+    if used_gps:
         weather = get_weather_by_coords(lat, lon)
         aqi = get_aqi_by_coords(lat, lon)
+        forecast = get_forecast_by_coords(lat, lon)
     else:
         weather = get_weather_data(display_city)
         aqi = get_aqi_data(display_city)
+        forecast = get_forecast_by_city(display_city)
 
     # Demo override
     if DEMO_MODE:
@@ -76,6 +94,11 @@ def get_risk(
         elif DEMO_SCENARIO == "HIGH":
             weather.update(temp=42, rain=1, rain_mm=8)
             aqi = 250
+        demo_slot = {
+            "temp": weather["temp"], "humidity": 50, "rain": weather["rain"],
+            "rain_mm": weather["rain_mm"], "pop": 50, "dt": None,
+        }
+        forecast = {"h3": dict(demo_slot), "h6": dict(demo_slot)}
 
     temp = weather.get("temp", 30)
     rain_mm = weather.get("rain_mm", 0) or 0   # mm per hour
@@ -94,7 +117,7 @@ def get_risk(
     elif rain_mm > 2.5:
         explanation.append("Moderate rain (>2.5 mm/h) may cause delays")
     else:
-        explanation.append("No significant rainfall expected")
+        explanation.append("No significant rainfall right now")
 
     if aqi > 200:
         explanation.append("Severe pollution impacts health")
@@ -115,15 +138,34 @@ def get_risk(
     if LEVELS[live] > LEVELS.get(risk, 0):
         risk = live
 
-    if risk == "HIGH":
-        recommendation = "Premium Plan Recommended"
-        explanation.append("High risk → higher premium 🔴")
-    elif risk == "MEDIUM":
-        recommendation = "Moderate Plan Recommended"
-        explanation.append("Moderate risk → balanced pricing 🟡")
+    # Forecast risk for the next 3h and 6h (AQI stays at the current value)
+    forecast_out = None
+    outlook_notes = []
+    if forecast:
+        forecast_out = {}
+        for key, label in (("h3", "Next 3h"), ("h6", "Next 6h")):
+            slot = dict(forecast[key])
+            slot["risk"] = live_level(slot["temp"], slot["rain_mm"], aqi)
+            forecast_out[key] = slot
+            outlook_notes.append(slot_note(label, slot))
+
+    # Outlook = worst of now, +3h and +6h. Plan recommendation and price follow it.
+    outlook_risk = risk
+    if forecast_out:
+        outlook_risk = worst(risk, forecast_out["h3"]["risk"], forecast_out["h6"]["risk"])
+
+    # If the forecast is worse than now, price goes up 10% per level
+    steps = max(0, LEVELS[outlook_risk] - LEVELS.get(risk, 0))
+    price = round(ml_price * (1 + 0.10 * steps))
+
+    recommended_plan = PLAN_FOR_LEVEL[outlook_risk]
+
+    if outlook_risk == "HIGH":
+        explanation.append("High risk ahead → higher premium 🔴")
+    elif outlook_risk == "MEDIUM":
+        explanation.append("Moderate risk ahead → balanced pricing 🟡")
     else:
-        recommendation = "Basic Plan Recommended"
-        explanation.append("Low risk → lower premium 🟢")
+        explanation.append("Low risk ahead → lower premium 🟢")
 
     return {
         "city": display_city,
@@ -132,7 +174,13 @@ def get_risk(
         "weather": weather,
         "aqi": aqi,
         "ml_price": ml_price,
+        "price": price,
+        "forecast": forecast_out,                  # None if forecast unavailable
+        "forecast_available": forecast_out is not None,
+        "outlook_risk": outlook_risk,
+        "outlook_notes": outlook_notes,
+        "recommended_plan": recommended_plan,
         "reason": " | ".join(explanation),
-        "recommendation": recommendation,
+        "recommendation": f"{recommended_plan} Plan Recommended",
         "data_fallback": bool(weather.get("fallback")),
     }
