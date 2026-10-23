@@ -7,6 +7,8 @@ from app.db.session import get_db
 from app.models.user import User
 from app.api.deps import get_current_user
 from app.ml.premium_model import calculate_premium
+from app.ml.premium_model import calculate_premium
+from app.services import zone_pool
 from app.utils.weather_api import (
     get_weather_data,
     get_aqi_data,
@@ -68,7 +70,13 @@ def get_risk(
 
     saved_city = getattr(db_user, "location", None) or "Hyderabad"
     used_gps = lat is not None and lon is not None
-
+        # Remember where the worker is, so they join the pool of that area
+    try:
+        if used_gps:
+            zone_pool.save_user_position(db, db_user, lat, lon)
+    except Exception as e:
+        db.rollback()
+        print("Zone save failed:", e)
     # Pricing always uses the saved profile city
     pricing_city = "Hyderabad" if DEMO_MODE else saved_city
     display_city = city or pricing_city
@@ -170,6 +178,7 @@ def get_risk(
     return {
         "city": display_city,
         "location_source": "gps" if used_gps else "saved_city",
+        "zone": zone_pool.zone_of_user(db_user),
         "risk": risk,
         "weather": weather,
         "aqi": aqi,
