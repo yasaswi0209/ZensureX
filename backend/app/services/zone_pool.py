@@ -1,4 +1,4 @@
-```python
+
 from datetime import datetime, timedelta
 from math import radians, sin, cos, sqrt, atan2
 
@@ -632,4 +632,4 @@ def summary(
 
         "trend": weeks,
     }
-```
+
