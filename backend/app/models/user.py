@@ -36,4 +36,4 @@ class User(Base):
     # Password reset OTP
     reset_otp_hash = Column(String, nullable=True)
     reset_otp_expires = Column(DateTime(timezone=True), nullable=True)
-```
+s
