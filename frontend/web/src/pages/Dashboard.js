@@ -28,48 +28,11 @@ const chartData = [
 
 const RISK_COLOR = { LOW: "green", MEDIUM: "orange", HIGH: "red" };
 
-// Same thresholds as the backend and Policy page (rain in mm/h)
-function liveLevel(temp, rainMm, aqi) {
-  let level = "LOW";
-  if (rainMm > 2.5 || temp > 35 || aqi > 150) level = "MEDIUM";
-  if (
-    rainMm > 7.5 ||
-    temp > 40 ||
-    aqi > 200 ||
-    (rainMm > 2.5 && (temp > 35 || aqi > 150))
-  ) {
-    level = "HIGH";
-  }
-  return level;
-}
-
-// Same price formula as the Policy page
-function getPlanPrices(mlPrice) {
-  const base = mlPrice > 0 ? mlPrice : 20;
-  const moderate = Math.round(base * 1.25);
-  const premium = Math.max(Math.round(base * 1.5), moderate + 5);
-  return { Basic: base, Moderate: moderate, Premium: premium };
-}
-
-function getRecommendationDetails(risk) {
-  if (risk === "LOW") {
-    return { plan: "Basic", reason: "Low disruption probability detected.", confidence: 82 };
-  }
-  if (risk === "MEDIUM") {
-    return { plan: "Moderate", reason: "Moderate environmental risk detected.", confidence: 88 };
-  }
-  if (risk === "HIGH") {
-    return { plan: "Premium", reason: "High disruption probability detected.", confidence: 95 };
-  }
-  return null;
-}
-
 function Dashboard() {
 
-  const { plan, setPlan, premium, setPremium } = useContext(AppContext);
+  const { plan, premium } = useContext(AppContext);
 
   const navigate = useNavigate();
-  const [message, setMessage] = useState("");
   const [data, setData] = useState(null);
   const [position, setPosition] = useState([17.385, 78.4867]);
 
@@ -89,15 +52,8 @@ function Dashboard() {
   const usingGps = data?.location_source === "gps";
   const shownCity = data?.city || city || "Your area";
 
-  const recommendation = getRecommendationDetails(data?.risk);
-  const prices = getPlanPrices(data?.ml_price);
-
-  // Estimate from current conditions (not a true forecast)
-  const futureRisk = data ? liveLevel(temp, rainMm, aqi) : "";
-
-  const reasonLines = data?.reason ? data.reason.split("|") : [];
-  const mlOnly =
-    data?.risk && data.risk !== "LOW" && liveLevel(temp, rainMm, aqi) === "LOW";
+  const forecast = data?.forecast || null;
+  const next6 = forecast?.h6?.risk || "";
 
   async function getCityCoordinates(cityName) {
     try {
@@ -139,7 +95,6 @@ function Dashboard() {
           navigate("/login");
           return;
         }
-        // GPS request failed: retry once with the saved city
         if (params && params.lat !== undefined) {
           load(city ? { city } : {});
           return;
@@ -162,7 +117,7 @@ function Dashboard() {
         setPosition([latitude, longitude]);
         load({ lat: latitude, lon: longitude });
       },
-      () => byCity(), // permission denied or timed out
+      () => byCity(),
       { timeout: 8000 }
     );
   }, [city, navigate]);
@@ -180,40 +135,14 @@ function Dashboard() {
     updateLocation();
   }, [city, data?.city]);
 
-  async function upgradePlan(selectedPlan) {
-
-    if (!selectedPlan) return;
-
-    try {
-
-      const token = localStorage.getItem("token");
-
-      const res = await axios.post(
-        `${API_BASE}/insurance/upgrade`,
-        null,
-        {
-          params: { plan: selectedPlan },
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        }
-      );
-
-      setPlan(res.data.plan);
-      setPremium(res.data.premium);
-
-      setMessage("Plan upgraded 🚀");
-
-    } catch (err) {
-      console.error(err);
-
-      if (err.response?.status === 400) {
-        setMessage(err.response.data.detail);
-      }
-    }
-  }
-
   const circleColor = RISK_COLOR[data?.risk] || "green";
+
+  const forecastRows = forecast
+    ? [
+        { label: "Next 3h", slot: forecast.h3 },
+        { label: "Next 6h", slot: forecast.h6 }
+      ]
+    : [];
 
   return (
 
@@ -244,8 +173,6 @@ function Dashboard() {
                 {" "}• 🌧 {Number(rainMm).toFixed(1)} mm/h • 🌫 AQI {aqi}
               </p>
             )}
-
-            {message && <p className="muted">{message}</p>}
 
           </div>
 
@@ -278,9 +205,9 @@ function Dashboard() {
           <motion.div className="status-card glass">
             <div className="status-icon protection">🛡</div>
             <div>
-              <p className="status-label">Next 6h Risk (estimate)</p>
-              <p className={`status-value ${futureRisk.toLowerCase()}`}>
-                {futureRisk || "Loading"}
+              <p className="status-label">Next 6h Risk (forecast)</p>
+              <p className={`status-value ${next6.toLowerCase()}`}>
+                {data ? (next6 || "Unavailable") : "Loading"}
               </p>
             </div>
           </motion.div>
@@ -384,10 +311,10 @@ function Dashboard() {
 
                 <motion.button
                   className="upgrade-btn"
-                  onClick={() => upgradePlan(recommendation?.plan)}
+                  onClick={() => navigate("/policy")}
                   whileHover={{ scale: 1.05 }}
                 >
-                  🚀 Upgrade Plan
+                  🚀 Choose Plan
                 </motion.button>
 
                 <p className="dsc-label">⚠ Risk Level</p>
@@ -414,8 +341,8 @@ function Dashboard() {
               <motion.div className="dash-stat-card glass premium-card">
                 <p className="dsc-label">💰 Weekly Premium</p>
                 <h3 className="card-value">₹{premium || 0}</h3>
-                {data?.ml_price ? (
-                  <p className="muted">AI price today: ₹{data.ml_price}</p>
+                {data?.price ? (
+                  <p className="muted">Price today: ₹{data.price}</p>
                 ) : null}
               </motion.div>
 
@@ -431,62 +358,51 @@ function Dashboard() {
 
             </div>
 
-            {/* AI */}
+            {/* FORECAST */}
 
             <motion.div className="dashboard-panel">
 
-              <h3 className="dp-title">AI Recommendation</h3>
+              <h3 className="dp-title">Next 3h / 6h Weather</h3>
 
-              {recommendation ? (
-
+              {!data ? (
+                <p>Loading...</p>
+              ) : forecast ? (
                 <>
+                  {forecastRows.map(r => (
+                    <div key={r.label} style={{ marginBottom: "10px" }}>
+                      <p style={{ margin: 0 }}>
+                        <b>{r.label}</b>{" "}
+                        <span style={{ color: RISK_COLOR[r.slot.risk], fontWeight: "bold" }}>
+                          {r.slot.risk}
+                        </span>
+                      </p>
+                      <p className="muted" style={{ margin: 0 }}>
+                        🌡 {Number(r.slot.temp).toFixed(1)}°C
+                        {" "}• 🌧 {Number(r.slot.rain_mm).toFixed(1)} mm/h
+                        {" "}• ☔ {r.slot.pop}% chance
+                      </p>
+                    </div>
+                  ))}
 
                   <p>
-                    <b>Plan:</b>{" "}
-                    <span
-                      style={{ cursor: "pointer", color: "#6366f1" }}
-                      onClick={() => upgradePlan(recommendation.plan)}
-                    >
-                      {recommendation.plan} • ₹{prices[recommendation.plan]}/week
-                      {" "}(Click to upgrade 🚀)
+                    <b>Outlook:</b>{" "}
+                    <span style={{ color: RISK_COLOR[data.outlook_risk], fontWeight: "bold" }}>
+                      {data.outlook_risk}
                     </span>
                   </p>
 
-                  <p><b>Reason:</b></p>
-
-                  {reasonLines.length > 0 ? (
-                    <ul style={{ margin: "4px 0 8px 18px" }}>
-                      {reasonLines.map((line, i) => (
-                        <li key={i}>{line.trim()}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>{recommendation.reason}</p>
-                  )}
-
-                  {mlOnly && (
-                    <p className="muted">
-                      Current conditions are normal. The {data.risk} level comes
-                      from this area's historical risk pattern.
-                    </p>
-                  )}
-
-                  {data?.data_fallback && (
-                    <p className="muted">
-                      ⚠ Live weather unavailable, showing estimated values.
-                    </p>
-                  )}
-
-                  <p>
-                    <b>Confidence:</b> {recommendation.confidence}%
+                  <p className="muted">
+                    Check the Policy page to pick a plan for this outlook.
                   </p>
-
                 </>
-
               ) : (
+                <p className="muted">Forecast unavailable right now.</p>
+              )}
 
-                <p>Analyzing...</p>
-
+              {data?.data_fallback && (
+                <p className="muted">
+                  ⚠ Live weather unavailable, showing estimated values.
+                </p>
               )}
 
             </motion.div>
