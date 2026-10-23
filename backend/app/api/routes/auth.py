@@ -1,6 +1,10 @@
+import os
 import re
-from datetime import timedelta
+import secrets
+import hashlib
+from datetime import datetime, timedelta, timezone
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from jose import jwt, JWTError
@@ -84,11 +88,9 @@ def signup(user: UserCreate, db: Session = Depends(get_db)):
         }
 
     except HTTPException:
-        # let our own 409 / 422 errors through untouched
         raise
 
     except IntegrityError:
-        # two signups with the same email at the same moment
         db.rollback()
         raise HTTPException(status_code=409, detail="Email already registered")
 
@@ -120,6 +122,89 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "token_type": "bearer",
     }
 
+
+# ===================== 🆕 FORGOT / RESET PASSWORD =====================
+
+class ForgotIn(BaseModel):
+    email: str
+
+
+class ResetIn(BaseModel):
+    email: str
+    otp: str
+    new_password: str
+
+
+def _hash_otp(otp: str) -> str:
+    return hashlib.sha256(otp.encode()).hexdigest()
+
+
+def send_otp_email(to_email: str, otp: str):
+    r = requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "api-key": os.environ["BREVO_API_KEY"],
+            "Content-Type": "application/json",
+        },
+        json={
+            "sender": {"name": "Zensurex", "email": os.environ["MAIL_SENDER"]},
+            "to": [{"email": to_email}],
+            "subject": "Your Zensurex password reset code",
+            "htmlContent": f"<p>Your reset code is <b>{otp}</b>. It expires in 10 minutes.</p>",
+        },
+        timeout=10,
+    )
+    r.raise_for_status()
+
+
+@router.post("/forgot-password")
+def forgot_password(data: ForgotIn, db: Session = Depends(get_db)):
+    email = normalize_email(data.email)
+
+    if not EMAIL_REGEX.match(email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+
+    user = find_user_by_email(db, email)
+
+    if user:
+        otp = f"{secrets.randbelow(1_000_000):06d}"
+        user.reset_otp_hash = _hash_otp(otp)
+        user.reset_otp_expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        db.commit()
+        try:
+            send_otp_email(user.email, otp)
+        except Exception as e:
+            print("🔥 EMAIL ERROR:", str(e))
+            raise HTTPException(status_code=500, detail="Could not send email")
+
+    # same response whether or not the email exists
+    return {"message": "If that email is registered, a code has been sent"}
+
+
+@router.post("/reset-password")
+def reset_password(data: ResetIn, db: Session = Depends(get_db)):
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=422, detail="Password must be at least 6 characters")
+
+    user = find_user_by_email(db, data.email)
+
+    if (
+        not user
+        or not user.reset_otp_hash
+        or not user.reset_otp_expires
+        or user.reset_otp_expires < datetime.now(timezone.utc)
+        or user.reset_otp_hash != _hash_otp(data.otp.strip())
+    ):
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+
+    user.password = hash_password(data.new_password)
+    user.reset_otp_hash = None
+    user.reset_otp_expires = None
+    db.commit()
+    return {"message": "Password reset successful"}
+
+
+# ======================================================================
 
 # 👤 GET CURRENT USER
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
