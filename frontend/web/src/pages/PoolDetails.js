@@ -54,7 +54,25 @@ function PoolDetails() {
   } catch (e) {
     me = "";
   }
-
+function sendLocation(token) {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve();
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        axios
+          .post(
+            `${API_BASE}/pool/location`,
+            { lat: pos.coords.latitude, lon: pos.coords.longitude },
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+          .catch(() => {})
+          .finally(resolve);
+      },
+      () => resolve(), // permission denied or unavailable: fall back to the text location
+      { timeout: 8000, maximumAge: 600000 }
+    );
+  });
+}
   function load() {
     const token = localStorage.getItem("token");
     setError("");
