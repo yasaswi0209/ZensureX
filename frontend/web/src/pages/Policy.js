@@ -34,6 +34,8 @@ function Policy() {
   const [countdown, setCountdown] = useState("");
   const [lockDate, setLockDate] = useState(null);
   const [toast, setToast] = useState(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("qr");
 
   const claimFired = useRef(false);
 
@@ -293,24 +295,23 @@ function Policy() {
     }
   }
 
-  const reasonLines = reason ? reason.split("|") : [];
   const usingGps = locationSource === "gps";
 
-  const rows = [
-    { label: "Now", temp, rain: rainMm, pop: null, level: risk },
-    ...(forecast
-      ? [
-          { label: "Next 3h", temp: forecast.h3.temp, rain: forecast.h3.rain_mm, pop: forecast.h3.pop, level: forecast.h3.risk },
-          { label: "Next 6h", temp: forecast.h6.temp, rain: forecast.h6.rain_mm, pop: forecast.h6.pop, level: forecast.h6.risk }
-        ]
-      : [])
+  const payoutTriggers = [
+    { key: "rain", icon: "🌧️", label: "Heavy rain", value: rainMm, limit: 7.5, unit: "mm/h", digits: 1 },
+    { key: "heat", icon: "🔥", label: "Extreme heat", value: temp, limit: 45, unit: "°C", digits: 1 },
+    { key: "pollution", icon: "🌫️", label: "High pollution", value: aqi, limit: 250, unit: "AQI", digits: 0 }
   ];
+
+  function triggerColor(ratio) {
+    if (ratio >= 1) return "#ef4444";
+    if (ratio >= 0.5) return "#f59e0b";
+    return "#22c55e";
+  }
 
   return (
     <section className="scene active">
       <div className="policy-container">
-
-        {/* TOAST */}
         <AnimatePresence>
           {toast && (
             <motion.div
@@ -318,16 +319,11 @@ function Policy() {
               animate={{ y: 20, opacity: 1 }}
               exit={{ y: -80, opacity: 0 }}
               style={{
-                position: "fixed",
-                top: 0,
-                left: "50%",
+                position: "fixed", top: 0, left: "50%",
                 transform: "translateX(-50%)",
                 background: toast.type === "success" ? "#22c55e" : "#ef4444",
-                color: "white",
-                padding: "12px 20px",
-                borderRadius: "10px",
-                zIndex: 9999,
-                fontWeight: "bold"
+                color: "white", padding: "12px 20px", borderRadius: "10px",
+                zIndex: 9999, fontWeight: "bold"
               }}
             >
               {toast.message}
@@ -339,72 +335,16 @@ function Policy() {
           Choose Protection Plan
         </h1>
 
-        {/* LOCK MESSAGE */}
         {isLocked && (
           <div style={{
-            textAlign: "center",
-            marginBottom: "20px",
-            padding: "12px",
-            background: "white",
-            borderRadius: "10px",
-            fontWeight: "bold"
+            textAlign: "center", marginBottom: "20px", padding: "12px",
+            background: "white", borderRadius: "10px", fontWeight: "bold"
           }}>
             🔒 {plan ? `${plan} plan active. ` : ""}{lockMessage}
             <br />
             ⏳ Unlocks in: {countdown}
           </div>
         )}
-
-        {/* INFO */}
-        <div style={{ textAlign: "center", marginBottom: "15px" }}>
-          <p style={{ color: "green" }}>🤖 AI Pricing Active</p>
-
-          <p>
-            📍 {usingGps ? "Live location" : city}
-            {usingGps && city ? ` (profile city: ${city})` : ""}
-          </p>
-
-          <p>🌫 AQI {aqi}</p>
-
-          {/* NOW + FORECAST */}
-          <div style={{ display: "inline-block", textAlign: "left" }}>
-            {rows.map(r => (
-              <p key={r.label} style={{ margin: "4px 0" }}>
-                <b>{r.label}:</b> 🌡 {Number(r.temp).toFixed(1)}°C • 🌧 {Number(r.rain).toFixed(1)} mm/h
-                {r.pop !== null ? ` (${r.pop}% chance)` : ""} •{" "}
-                <span style={{ color: RISK_COLOR[r.level] || "gray", fontWeight: "bold" }}>
-                  {r.level}
-                </span>
-              </p>
-            ))}
-          </div>
-
-          {!forecast && risk && (
-            <p style={{ color: "#f59e0b" }}>
-              ⚠ Forecast unavailable, plan is based on current conditions only.
-            </p>
-          )}
-
-          {outlookRisk && (
-            <p style={{ color: RISK_COLOR[outlookRisk] || "gray", fontWeight: "bold", marginTop: "8px" }}>
-              🔮 Outlook (worst of next 6h): {outlookRisk}
-            </p>
-          )}
-
-          {dataFallback && (
-            <p style={{ color: "#f59e0b" }}>
-              ⚠ Live weather unavailable, showing estimated values.
-            </p>
-          )}
-        </div>
-
-        {/* INSIGHT */}
-        <div style={{ textAlign: "center", marginBottom: "20px" }}>
-          <p style={{ color: "gray", fontWeight: "bold" }}>🤖 AI Insight</p>
-          {reasonLines.map((r, i) => (
-            <p key={i} style={{ color: "gray" }}>• {r.trim()}</p>
-          ))}
-        </div>
 
         {/* PLANS */}
         <div className="pricing-grid">
@@ -446,16 +386,129 @@ function Policy() {
           })}
         </div>
 
-        {/* CONFIRM */}
-        <div style={{ textAlign: "center", marginTop: "20px" }}>
-          <button
-            className="btn-primary"
-            onClick={handleConfirm}
-            disabled={isLocked}
-          >
-            {isLocked ? "Plan Locked 🔒" : "Confirm Plan 🚀"}
-          </button>
+        {/* LIVE PAYOUT TRIGGERS */}
+        <div style={{
+          maxWidth: "900px", margin: "28px auto 0", padding: "22px",
+          background: "#fff", border: "1px solid #e5e7eb", borderRadius: "18px",
+          boxShadow: "0 8px 28px rgba(15,23,42,.05)"
+        }}>
+          <h2 style={{ margin: "0 0 6px", fontSize: "20px" }}>Live Payout Triggers</h2>
+          <p style={{ color: "#64748b", fontSize: "13px", margin: "0 0 20px" }}>
+            Current conditions for {city || "your saved city"}. A trigger is reached only when the current value exceeds its policy threshold.
+          </p>
+          {payoutTriggers.map(item => {
+            const ratio = item.limit ? item.value / item.limit : 0;
+            const hit = item.value > item.limit;
+            return (
+              <div key={item.key} style={{ marginBottom: "18px" }}>
+                <div style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  gap: "12px", flexWrap: "wrap", marginBottom: "8px", fontSize: "14px"
+                }}>
+                  <span>{item.icon} <b>{item.label}</b></span>
+                  <span>
+                    <b>{Number(item.value).toFixed(item.digits)}</b> / {item.limit} {item.unit}
+                    <span style={{
+                      marginLeft: "9px", fontSize: "11px", fontWeight: 800,
+                      color: hit ? "#b91c1c" : "#166534",
+                      background: hit ? "#fee2e2" : "#dcfce7",
+                      borderRadius: "999px", padding: "3px 8px"
+                    }}>{hit ? "TRIGGERED" : "NOT TRIGGERED"}</span>
+                  </span>
+                </div>
+                <div style={{
+                  width: "100%", height: "8px", background: "#e5e7eb",
+                  borderRadius: "999px", overflow: "hidden"
+                }}>
+                  <div style={{
+                    width: `${Math.min(100, ratio * 100)}%`, height: "100%",
+                    borderRadius: "999px", background: triggerColor(ratio),
+                    transition: "width .5s ease"
+                  }} />
+                </div>
+              </div>
+            );
+          })}
+          <p style={{ margin: "8px 0 0", fontSize: "13px", color: "#64748b" }}>
+            Overall risk: <b style={{ color: RISK_COLOR[risk] || "#64748b" }}>{risk || "UNKNOWN"}</b>
+            {dataFallback ? " · Weather data is estimated, not live." : ""}
+          </p>
         </div>
+
+        {/* DEMO PAYMENT */}
+        <div style={{ textAlign: "center", marginTop: "20px" }}>
+          <button className="btn-primary" onClick={() => setPaymentOpen(true)}
+            disabled={isLocked || !selectedPlan}>
+            {isLocked ? "Plan Locked 🔒" : `Pay ₹${selectedPlan?.price ?? 0} with Razorpay Demo`}
+          </button>
+          {!isLocked && <p style={{ color: "#64748b", fontSize: "12px", marginTop: "8px" }}>
+            Demo checkout only — this QR is not a real payment request.
+          </p>}
+        </div>
+
+        {paymentOpen && selectedPlan && (
+          <div role="dialog" aria-modal="true" aria-label="Razorpay demo checkout"
+            style={{
+              position: "fixed", inset: 0, zIndex: 10000, background: "rgba(15,23,42,.65)",
+              display: "grid", placeItems: "center", padding: "18px"
+            }}>
+            <div style={{
+              position: "relative", width: "100%", maxWidth: "420px", background: "#fff",
+              borderRadius: "20px", padding: "26px", textAlign: "center",
+              boxShadow: "0 20px 70px rgba(0,0,0,.25)"
+            }}>
+              <button onClick={() => setPaymentOpen(false)} aria-label="Close payment dialog"
+                style={{
+                  position: "absolute", top: "12px", right: "14px", border: 0,
+                  background: "transparent", fontSize: "24px", cursor: "pointer", color: "#64748b"
+                }}>×</button>
+              <h2 style={{ margin: "0 0 6px" }}>Razorpay Demo Checkout</h2>
+              <p style={{ color: "#64748b", margin: "0 0 18px" }}>
+                {selectedPlan.name} protection · billed weekly
+              </p>
+              <div style={{ fontSize: "34px", fontWeight: 800, marginBottom: "18px" }}>
+                ₹{selectedPlan.price}<span style={{ fontSize: "13px", color: "#64748b" }}>/week</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", gap: "10px", marginBottom: "18px" }}>
+                <button onClick={() => setPaymentMethod("qr")} style={{
+                  padding: "9px 14px", borderRadius: "9px", cursor: "pointer",
+                  border: `1px solid ${paymentMethod === "qr" ? "#4f46e5" : "#d1d5db"}`,
+                  background: paymentMethod === "qr" ? "#eef2ff" : "#fff"
+                }}>Scan demo QR</button>
+                <button onClick={() => setPaymentMethod("checkout")} style={{
+                  padding: "9px 14px", borderRadius: "9px", cursor: "pointer",
+                  border: `1px solid ${paymentMethod === "checkout" ? "#4f46e5" : "#d1d5db"}`,
+                  background: paymentMethod === "checkout" ? "#eef2ff" : "#fff"
+                }}>Test checkout</button>
+              </div>
+              {paymentMethod === "qr" ? (
+                <>
+                  <img alt="Demo-only QR code, not a payable Razorpay QR" width="190" height="190"
+                    style={{ display: "block", margin: "0 auto 12px", imageRendering: "pixelated" }}
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=190x190&data=${encodeURIComponent(
+                      `ZENSUREX DEMO ONLY | ${selectedPlan.name} | INR ${selectedPlan.price} per week | NOT A REAL PAYMENT`
+                    )}`} />
+                  <p style={{ color: "#b45309", fontSize: "12px", lineHeight: 1.5 }}>
+                    This QR only identifies the demo plan. It cannot collect money and is not a Razorpay-issued UPI QR.
+                  </p>
+                </>
+              ) : (
+                <div style={{
+                  padding: "16px", borderRadius: "12px", background: "#f8fafc",
+                  color: "#475569", fontSize: "13px", lineHeight: 1.6, marginBottom: "14px"
+                }}>
+                  Real Razorpay test checkout requires a backend-created order and server-side payment verification.
+                  Those endpoints are not configured by this frontend demo.
+                </div>
+              )}
+              <button className="btn" style={{ width: "100%", marginTop: "8px" }}
+                onClick={() => {
+                  setPaymentOpen(false);
+                  showToast("Demo checkout closed. No payment was taken.", "error");
+                }}>Close demo checkout</button>
+            </div>
+          </div>
+        )}
 
       </div>
     </section>
