@@ -6,7 +6,7 @@
 
 /* ── RESET & BASE ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+import "./styles/zensurex-extra.css";
 :root {
   /* Core Colors */
   --red:         #D32F2F;
