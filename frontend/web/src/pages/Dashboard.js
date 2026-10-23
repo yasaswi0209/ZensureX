@@ -17,9 +17,10 @@ import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 
 import "leaflet/dist/leaflet.css";
 import "../styles/zensurex-ui.css";
+import "../styles/zensurex-extra.css"; // NEW: styles for assistant, profile, settings
 import RainCanvas from "../components/RainCanvas";
 import CountUp from "../components/CountUp";
-   import Assistant from "../components/Assistant";
+import AssistantLauncher from "../components/AssistantLauncher"; // NEW
 
 const API_BASE = "https://zensurex-backend.onrender.com";
 
@@ -388,7 +389,7 @@ function Dashboard() {
 
             <p className="zx-loc">
               <span className="zx-live-dot" />
-             {shownCity}
+              {shownCity}
             </p>
 
             <div className="zx-temp-row">
@@ -661,7 +662,10 @@ function Dashboard() {
         </div>
 
       </div>
-               <Assistant />
+
+      {/* Floating robot: opens the full assistant page at /assistant */}
+      <AssistantLauncher />
+
     </section>
 
   );
