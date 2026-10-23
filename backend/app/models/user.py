@@ -11,7 +11,7 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     password = Column(String, nullable=False)
-
+    place = Column(String, nullable=True)   # readable area name from GPS, e.g. "Adyar"
     platform = Column(String, nullable=False)
     location = Column(String, nullable=False)
     weekly_income = Column(Integer, nullable=False)
