@@ -356,4 +356,97 @@ function Policy() {
         )}
 
         {/* INFO */}
-        <div style={{
+        <div style={{ textAlign: "center", marginBottom: "15px" }}>
+          <p style={{ color: "green" }}>🤖 AI Pricing Active</p>
+
+          <p>
+            📍 {usingGps ? "Live location" : city}
+            {usingGps && city ? ` (profile city: ${city})` : ""}
+          </p>
+
+          <p>
+            🌡 {Number(temp).toFixed(1)}°C | 🌧 {Number(rainMm).toFixed(1)} mm/h | 🌫 AQI {aqi}
+          </p>
+
+          <p style={{ color: RISK_COLOR[risk] || "gray", fontWeight: "bold" }}>
+            ⚠️ Risk Level: {risk}
+          </p>
+
+          <p style={{ color: RISK_COLOR[futureRisk] || "gray", fontWeight: "bold" }}>
+            🔮 Next 6h Risk (estimate): {futureRisk}
+          </p>
+
+          {dataFallback && (
+            <p style={{ color: "#f59e0b" }}>
+              ⚠ Live weather unavailable, showing estimated values.
+            </p>
+          )}
+        </div>
+
+        {/* INSIGHT */}
+        <div style={{ textAlign: "center", marginBottom: "20px" }}>
+          <p style={{ color: "gray", fontWeight: "bold" }}>🤖 AI Insight</p>
+          {reasonLines.map((r, i) => (
+            <p key={i} style={{ color: "gray" }}>• {r.trim()}</p>
+          ))}
+          {risk && liveLevel(temp, rainMm, aqi) === "LOW" && risk !== "LOW" && (
+            <p style={{ color: "gray" }}>
+              • Current conditions are normal. The {risk} level comes from this
+              area's historical risk pattern.
+            </p>
+          )}
+        </div>
+
+        {/* PLANS */}
+        <div className="pricing-grid">
+          {plans.map(p => {
+            const active = selectedPlan?.name === p.name;
+            const isRecommended = recommendedPlan === p.name;
+
+            return (
+              <motion.div
+                key={p.name}
+                className={`price-card ${active ? "active glow" : ""} ${isRecommended ? "highlight" : ""} ${isLocked ? "glow-locked" : ""}`}
+                whileHover={{ scale: isLocked ? 1 : 1.05 }}
+                onClick={() => {
+                  if (!isLocked) {
+                    setSelectedPlan(p);
+                  }
+                }}
+              >
+                {isRecommended && <div className="badge">Recommended</div>}
+
+                <h2>{p.name}</h2>
+                <h1>₹{p.price}<span>/week</span></h1>
+
+                <p className="muted">{p.desc}</p>
+
+                <ul>
+                  {p.features.map(f => <li key={f}>✔ {f}</li>)}
+                </ul>
+
+                <button className="btn" disabled={active || isLocked}>
+                  {isLocked ? "Locked 🔒" : active ? "Selected" : "Select Plan"}
+                </button>
+              </motion.div>
+            );
+          })}
+        </div>
+
+        {/* CONFIRM */}
+        <div style={{ textAlign: "center", marginTop: "20px" }}>
+          <button
+            className="btn-primary"
+            onClick={handleConfirm}
+            disabled={isLocked}
+          >
+            {isLocked ? "Plan Locked 🔒" : "Confirm Plan 🚀"}
+          </button>
+        </div>
+
+      </div>
+    </section>
+  );
+}
+
+export default Policy;
