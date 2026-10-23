@@ -1,333 +1,329 @@
-import React, { useState, useEffect, useRef } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import useLiveRisk, { API_BASE } from "../components/useLiveRisk";
+import "../styles/zensurex-ui.css";
 
-function Claims(){
+// Same limits the Policy page uses to decide a payout is due
+const LIMITS = { rain: 7.5, heat: 45, pollution: 250 };
 
-const [payment, setPayment] = useState("");
-const [selected,setSelected] = useState("");
-const [open,setOpen] = useState(false);
-const [status,setStatus] = useState("");
-const [payout,setPayout] = useState(null);
-const [reason,setReason] = useState("");
-const [confidence,setConfidence] = useState(null);
-const [risk,setRisk] = useState(null);
-const [paymentDetails, setPaymentDetails] = useState(null);
-const [userPayment, setUserPayment] = useState(null);
-const [fraudReason, setFraudReason] = useState("");
-const [recentClaims, setRecentClaims] = useState([]);
-const [alertMsg, setAlertMsg] = useState("");
-
-// ✅ ADD THIS FUNCTION HERE
-function downloadReceipt(){
-
-const content = `
-Claim Receipt
--------------------------
-Amount: ₹${payout}
-Reason: ${reason}
-UPI: ${userPayment?.upi}
-Time: ${paymentDetails?.time}
-Transaction ID: ${paymentDetails?.id}
-`;
-
-const blob = new Blob([content], { type: "text/plain" });
-const url = window.URL.createObjectURL(blob);
-
-const a = document.createElement("a");
-a.href = url;
-a.download = "claim_receipt.txt";
-a.click();
-}
-const dropdownRef = useRef();
-
-const options = [
-{ value:"rain", label:"🌧 Heavy Rain" },
-{ value:"pollution", label:"🌫 High Pollution" },
-{ value:"heat", label:"🔥 Extreme Heat" },
-{ value:"curfew", label:"🚫 Curfew" }
+const OPTIONS = [
+  { value: "rain", label: "🌧 Heavy rain" },
+  { value: "pollution", label: "🌫 High pollution" },
+  { value: "heat", label: "🔥 Extreme heat" },
+  { value: "curfew", label: "🚫 Curfew" }
 ];
 
-
-// 🔥 CLOSE DROPDOWN
-useEffect(()=>{
-function close(e){
-if(dropdownRef.current && !dropdownRef.current.contains(e.target)){
-setOpen(false);
-}
-}
-document.addEventListener("mousedown",close);
-return ()=>document.removeEventListener("mousedown",close);
-},[]);
-
-
-// 🔥 AUTO SELECT RAIN
-useEffect(()=>{
-setTimeout(()=>{ setSelected("rain"); },700);
-},[]);
-
-
-// 🔥 FETCH USER PAYMENT
-useEffect(() => {
-const user = JSON.parse(localStorage.getItem("user"));
-
-if(user?.id){
-axios.get(`https://zensurex-backend.onrender.com/settings/${user.id}`)
-.then(res => setUserPayment(res.data))
-.catch(err => console.error(err));
-}
-}, []);
-
-
-// 🔥 FETCH RECENT CLAIMS (only this worker's, needs login)
-useEffect(() => {
-axios.get("https://zensurex-backend.onrender.com/claims/recent", {
-headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
-})
-.then(res => setRecentClaims(res.data))
-.catch(err => console.error(err));
-}, []);
-
-
-// 🔥 AUTO CLAIM TRIGGER
-useEffect(() => {
-if(selected){
-autoTriggerClaim();
-}
-}, [selected]);
-
-
-async function autoTriggerClaim(){
-try{
-
-const city = localStorage.getItem("city") || "Hyderabad";
-
-// 🌦️ GET LIVE WEATHER
-const weatherRes = await axios.get(
-  `https://zensurex-backend.onrender.com/claims/weather/${city}`
-);
-
-// 🚀 AUTO CLAIM (the backend uses the logged-in worker)
-const token = localStorage.getItem("token");
-const res = await axios.post(
-  "https://zensurex-backend.onrender.com/claims/auto",
-  { trigger: selected },
-  { headers: { Authorization: `Bearer ${token}` } }
-);
-
-const data = res.data;
-
-setReason(data.reason || data.message);
-setPayout(data.amount || 0);
-setPayment(data.payment_status);
-setPaymentDetails(data.payment);
-setFraudReason(data.fraud_reason || "Valid claim");
-setConfidence(95);
-
-if(data.status === "approved"){
-
-setAlertMsg("💸 ₹" + data.amount + " sent to your UPI");
-
-setStatus("approved");
-
-if(data.risk_score < 0.4){
-setRisk("low");
-} else if(data.risk_score < 0.7){
-setRisk("medium");
-} else {
-setRisk("high");
+function meterColor(ratio) {
+  if (ratio >= 1) return "#ef4444";
+  if (ratio >= 0.5) return "#f59e0b";
+  return "#22c55e";
 }
 
-} else {
-setStatus("rejected");
+function scoreLabel(score) {
+  if (typeof score !== "number") return null;
+  if (score < 0.4) return "Low";
+  if (score < 0.7) return "Medium";
+  return "High";
 }
 
-}catch(err){
-console.error(err);
-setStatus("rejected");
-setReason("Server error");
-}
-}
+function Claims() {
 
+  const navigate = useNavigate();
+  const { data, loading, error, refresh } = useLiveRisk();
 
-// 🔘 MANUAL BUTTON
-async function handleApply(){
+  const [selected, setSelected] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | verifying | approved | rejected
+  const [result, setResult] = useState(null);
+  const [recent, setRecent] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(true);
+  const [upi, setUpi] = useState(null); // null = loading, "" = not set
 
-if(!selected){
-setStatus("rejected");
-setReason("Select disruption");
-return;
-}
+  const token = localStorage.getItem("token");
+  const headers = { Authorization: `Bearer ${token}` };
 
-// 🔥 show loading animation
-setStatus("verifying");
+  const temp = data?.weather?.temp ?? 0;
+  const rainMm = data?.weather?.rain_mm ?? 0;
+  const aqi = data?.aqi ?? 0;
 
-// 🔥 trigger claim (same as auto but manual)
-await autoTriggerClaim();
+  const meters = [
+    { key: "rain", icon: "🌧", label: "Heavy rain", value: rainMm, limit: LIMITS.rain, unit: "mm/h", digits: 1 },
+    { key: "heat", icon: "🔥", label: "Extreme heat", value: temp, limit: LIMITS.heat, unit: "°C", digits: 0 },
+    { key: "pollution", icon: "🌫", label: "High pollution", value: aqi, limit: LIMITS.pollution, unit: "AQI", digits: 0 }
+  ];
+  const triggered = data ? meters.filter(m => m.value > m.limit).map(m => m.key) : [];
 
-}
+  // default to what live data actually shows
+  useEffect(() => {
+    if (!data || selected) return;
+    setSelected(triggered[0] || "rain");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
+  function loadRecent() {
+    axios
+      .get(`${API_BASE}/claims/recent`, { headers })
+      .then(res => setRecent(res.data || []))
+      .catch(err => console.error(err))
+      .finally(() => setRecentLoading(false));
+  }
 
-return(
+  useEffect(() => {
+    loadRecent();
+    axios
+      .get(`${API_BASE}/settings/profile/me`, { headers })
+      .then(res => setUpi(res.data.upi_id || ""))
+      .catch(() => setUpi(""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-<section className="scene active">
+  async function submit() {
+    if (!selected || status === "verifying") return;
+    setStatus("verifying");
+    setResult(null);
 
-<div className="scene-layout scene-2-layout">
+    try {
+      const res = await axios.post(`${API_BASE}/claims/auto`, { trigger: selected }, { headers });
+      const d = res.data;
 
-{/* LEFT */}
-<div className="claims-left">
+      setResult({
+        reason: d.reason || d.message || "",
+        amount: d.amount || 0,
+        paid: d.payment_status === "success",
+        payment: d.payment || null,
+        fraud: d.fraud_reason || "",
+        score: d.risk_score
+      });
+      setStatus(d.status === "approved" ? "approved" : "rejected");
+      loadRecent();
+    } catch (err) {
+      console.error(err);
+      setResult({
+        reason: err.response?.data?.detail || "The server could not process the claim. Try again.",
+        amount: 0
+      });
+      setStatus("rejected");
+    }
+  }
 
-<motion.div className="dashboard-panel">
+  function downloadReceipt() {
+    const lines = [
+      "ZensureX claim receipt",
+      "-------------------------",
+      `Amount: Rs ${result?.amount}`,
+      `Reason: ${result?.reason}`,
+      `UPI: ${upi || "not set"}`,
+      `Time: ${result?.payment?.time || ""}`,
+      `Transaction ID: ${result?.payment?.id || ""}`
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "claim_receipt.txt";
+    a.click();
+    window.URL.revokeObjectURL(url);
+  }
 
-<h3 className="dp-title">AI Claim Engine</h3>
+  const selectedLabel = OPTIONS.find(o => o.value === selected)?.label || "";
+  let warning = "";
+  if (data && selected) {
+    if (selected === "curfew") warning = "Curfews cannot be checked from live data, so this claim needs a manual review.";
+    else if (!triggered.includes(selected)) warning = "Live data does not show this disruption right now. The claim may be rejected.";
+  }
 
-<div className="workflow-box">
-<WorkflowStep label="Submit" active/>
-<WorkflowStep label="AI Review" active={status==="verifying"}/>
-<WorkflowStep label="Payout" active={status==="approved"}/>
-</div>
+  const stepIndex = status === "verifying" ? 1 : status === "approved" ? 2 : 0;
+  const risk = scoreLabel(result?.score);
 
-<div className="ai-suggestion">
-AI detected disruption: <b>🌧 Heavy Rain</b>
-</div>
+  return (
+    <section className="scene active">
+      <div className="zx-page" style={{ paddingTop: 96 }}>
 
-<div ref={dropdownRef} className="dropdown-box">
+        <div className="zx-rise" style={{ "--i": 0, marginBottom: 20 }}>
+          <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-.02em", margin: 0 }}>Claims</h1>
+          <p className="zx-muted" style={{ marginTop: 4, fontSize: 14 }}>
+            Payouts trigger from live conditions in {data?.city || localStorage.getItem("city") || "your area"}.
+          </p>
+        </div>
 
-<label>Confirm disruption</label>
+        {error && (
+          <div className="zx-banner zx-banner-danger">
+            <span>⚠️</span><span>{error}</span>
+            <button className="zx-cta" style={{ marginLeft: "auto", marginTop: 0 }} onClick={refresh}>Try again</button>
+          </div>
+        )}
 
-<div className="dropdown" onClick={()=>setOpen(!open)}>
-<span>
-{selected ? options.find(o=>o.value===selected)?.label : "Choose disruption"}
-</span>
-<span>▾</span>
-</div>
+        <div className="zx-grid">
 
-{open && (
-<div className="dropdown-list">
-{options.map(opt=>(
-<div key={opt.value}
-className="dropdown-item"
-onClick={()=>{
-setSelected(opt.value);
-setOpen(false);
-}}>
-{opt.label}
-</div>
-))}
-</div>
-)}
+          {/* LEFT */}
+          <div className="zx-col">
 
-</div>
+            <div className="zx-card zx-rise" style={{ "--i": 1 }}>
+              <div className="zx-card-head">
+                <div>
+                  <h3 className="zx-card-title">Live payout triggers</h3>
+                  <p className="zx-card-sub">A payout is due when a bar reaches its limit.</p>
+                </div>
+                <button className="zx-btn" onClick={refresh} disabled={loading}>{loading ? "Checking..." : "Refresh"}</button>
+              </div>
 
-<button className="btn" onClick={handleApply}>
-⚡ Auto Claim Now
-</button>
+              {loading && !data ? (
+                <span className="zx-skel" style={{ width: "100%", height: 170 }} />
+              ) : (
+                meters.map(m => {
+                  const ratio = m.limit ? m.value / m.limit : 0;
+                  const hit = m.value > m.limit;
+                  return (
+                    <div key={m.key} className="zx-meter">
+                      <div className="zx-meter-top">
+                        <span>{m.icon} {m.label}</span>
+                        <span>
+                          <b>{Number(m.value).toFixed(m.digits)}</b> of {m.limit} {m.unit}
+                          {hit && <em className="zx-hit">Triggered</em>}
+                        </span>
+                      </div>
+                      <div className="zx-bar" style={{ height: 8 }}>
+                        <div
+                          className="zx-bar-fill"
+                          style={{ width: `${Math.min(100, ratio * 100)}%`, background: meterColor(ratio) }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
 
-</motion.div>
+              {data && (
+                <p className="zx-muted" style={{ marginTop: 12 }}>
+                  Overall risk: <b style={{ color: data.risk === "HIGH" ? "#ef4444" : data.risk === "MEDIUM" ? "#f59e0b" : "#22c55e" }}>{data.risk}</b>
+                  {triggered.length === 0 ? ". Nothing has reached a payout limit right now." : ""}
+                </p>
+              )}
+            </div>
 
+            <div className="zx-card zx-rise" style={{ "--i": 2 }}>
+              <div className="zx-card-head">
+                <div>
+                  <h3 className="zx-card-title">File a claim</h3>
+                  <p className="zx-card-sub">Confirm the disruption that stopped your work.</p>
+                </div>
+              </div>
 
-{/* 🔥 RECENT CLAIMS */}
-<motion.div className="dashboard-panel">
-<h3 className="dp-title">Recent Claims</h3>
+              <div className="zx-steps">
+                {["Submit", "AI review", "Payout"].map((s, i) => (
+                  <div key={s} className={`zx-step ${i <= stepIndex ? "on" : ""}`}>
+                    <span>{i + 1}</span>{s}
+                  </div>
+                ))}
+              </div>
 
-{recentClaims.map((c,i)=>(
-<div key={i} className="claim-history-item">
-<span>{c.type}</span>
-<span>₹{c.amount}</span>
-<span className="muted">{c.date}</span>
-</div>
-))}
+              <div className="zx-field">
+                <label htmlFor="claim-type">Disruption</label>
+                <select id="claim-type" className="zx-select" value={selected} onChange={e => setSelected(e.target.value)}>
+                  {OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
 
-</motion.div>
+              {warning && <p className="zx-note">{warning}</p>}
 
-</div>
+              {upi === "" && (
+                <p className="zx-note">
+                  Add your UPI ID in your profile so the payout can reach you.{" "}
+                  <button className="zx-link-btn" onClick={() => navigate("/profile")}>Open profile</button>
+                </p>
+              )}
+              {upi && <p className="zx-muted" style={{ marginBottom: 12 }}>Payout goes to {upi}</p>}
 
+              <button className="zx-cta" style={{ marginTop: 4 }} onClick={submit} disabled={!selected || status === "verifying"}>
+                {status === "verifying" ? "Checking your claim..." : `⚡ Submit ${selectedLabel ? selectedLabel.replace(/^\S+\s/, "").toLowerCase() : ""} claim`}
+              </button>
+            </div>
 
-{/* RIGHT */}
-<div className="claims-right">
+          </div>
 
-<motion.div className="dashboard-panel decision-panel">
+          {/* RIGHT */}
+          <div className="zx-col">
 
-<h3 className="dp-title">AI Decision</h3>
+            <div className="zx-card zx-rise" style={{ "--i": 3 }}>
+              <div className="zx-card-head">
+                <div>
+                  <h3 className="zx-card-title">AI decision</h3>
+                  <p className="zx-card-sub">Checked against live weather and fraud rules.</p>
+                </div>
+              </div>
 
-{status==="" && <p>Auto-detecting disruption...</p>}
+              {status === "idle" && (
+                <div className="zx-empty" style={{ minHeight: 160 }}>
+                  <span className="zx-empty-icon">🤖</span>
+                  <b>No claim submitted yet</b>
+                  <span className="zx-muted">Submit a claim and the decision appears here.</span>
+                </div>
+              )}
 
-{status==="verifying" && (
-<div className="status-card warn">
-🤖 analysing weather & demand...
-</div>
-)}
+              {status === "verifying" && (
+                <div className="zx-banner zx-banner-warn" style={{ margin: 0 }}>
+                  <span>🤖</span><span>Analysing weather, demand and fraud signals...</span>
+                </div>
+              )}
 
-{status==="approved" && (
-<div className="status-card success">
+              {status === "approved" && result && (
+                <div className="zx-result ok">
+                  <p className="zx-result-tag">⚡ Claim approved</p>
+                  <p className="zx-result-amount">₹{result.amount}</p>
+                  <p>{result.reason}</p>
+                  <div className="zx-result-grid">
+                    <div><span>Payment</span><b>{result.paid ? "✅ Paid" : "❌ Failed"}</b></div>
+                    {risk && <div><span>Fraud risk</span><b>{risk}</b></div>}
+                    {result.fraud && <div><span>Review</span><b>{result.fraud}</b></div>}
+                    {result.payment?.time && <div><span>Time</span><b>{result.payment.time}</b></div>}
+                    {result.payment?.id && <div><span>Transaction ID</span><b>{result.payment.id}</b></div>}
+                  </div>
+                  <button className="zx-btn" style={{ marginTop: 14 }} onClick={downloadReceipt}>🧾 Download receipt</button>
+                </div>
+              )}
 
-<div className="decision-row">
+              {status === "rejected" && result && (
+                <div className="zx-result bad">
+                  <p className="zx-result-tag">❌ Claim not approved</p>
+                  <p>{result.reason || "The claim did not meet the payout rules."}</p>
+                </div>
+              )}
+            </div>
 
-{/* LEFT */}
-<div className="decision-left">
-<p className="auto-tag">⚡ Auto Claim Triggered</p>
-<h3>{reason}</h3>
-</div>
+            <div className="zx-card zx-rise" style={{ "--i": 4 }}>
+              <div className="zx-card-head">
+                <div>
+                  <h3 className="zx-card-title">Recent claims</h3>
+                  <p className="zx-card-sub">Your last payouts</p>
+                </div>
+              </div>
 
-{/* CENTER */}
-<div className="decision-center">
-<h1>₹{payout}</h1>
-<p>AI confidence {confidence}%</p>
-</div>
+              {recentLoading ? (
+                <span className="zx-skel" style={{ width: "100%", height: 90 }} />
+              ) : recent.length === 0 ? (
+                <div className="zx-empty" style={{ minHeight: 140 }}>
+                  <span className="zx-empty-icon">🧾</span>
+                  <b>No claims yet</b>
+                  <span className="zx-muted">Approved claims will be listed here.</span>
+                </div>
+              ) : (
+                recent.map((c, i) => (
+                  <div key={i} className="zx-history">
+                    <span className="zx-history-type">{c.type}</span>
+                    <b>₹{c.amount}</b>
+                    <span className="zx-muted">{c.date}</span>
+                  </div>
+                ))
+              )}
+            </div>
 
-{/* RIGHT */}
-<div className="decision-right">
+          </div>
 
-<p><b>Risk:</b> {risk}</p>
-<p><b>Decision:</b> {fraudReason}</p>
-<p>{payment==="success" ? "✅ Paid" : "❌ Failed"}</p>
+        </div>
 
-{/* 🔥 MOVE PAYMENT DETAILS INSIDE HERE */}
-{paymentDetails && (
-<div className="mini-box">
-<p><b>Time:</b> {paymentDetails.time}</p>
-<p><b>Transaction ID:</b> {paymentDetails?.id}</p>
-</div>
-)}
-
-</div>
-
-</div>
-
-
-<button onClick={downloadReceipt} className="btn">
-🧾 Download Receipt
-</button>
-
-</div>
-)}
-
-{status==="rejected" && (
-<div className="status-card danger">
-<h3>❌ Claim Rejected</h3>
-<p>{reason}</p>
-<p>₹{payout}</p>
-</div>
-)}
-
-</motion.div>
-
-</div>
-
-</div>
-
-</section>
-);
-}
-
-
-function WorkflowStep({label,active}){
-return(
-<div className={`workflow-step ${active?"active":""}`}>
-<div className="dot"/>
-{label}
-</div>
-);
+      </div>
+    </section>
+  );
 }
 
 export default Claims;
