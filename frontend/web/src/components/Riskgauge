@@ -1,0 +1,49 @@
+export const RISK = { LOW: "#22c55e", MEDIUM: "#f59e0b", HIGH: "#ef4444" };
+
+// risk: "LOW" | "MEDIUM" | "HIGH". dark: true when drawn on a dark background.
+export default function RiskGauge({ risk, dark = false }) {
+  const rotation = { LOW: -60, MEDIUM: 0, HIGH: 60 }[risk] ?? -90;
+  const needle = dark ? "#ffffff" : "#0f172a";
+
+  const pt = (deg, r) => {
+    const a = (deg * Math.PI) / 180;
+    return [100 + r * Math.cos(a), 100 - r * Math.sin(a)];
+  };
+  const arc = (from, to) => {
+    const [x1, y1] = pt(from, 80);
+    const [x2, y2] = pt(to, 80);
+    return `M ${x1.toFixed(1)} ${y1.toFixed(1)} A 80 80 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+  };
+
+  const segments = [
+    { key: "LOW", from: 178, to: 122 },
+    { key: "MEDIUM", from: 118, to: 62 },
+    { key: "HIGH", from: 58, to: 2 }
+  ];
+
+  return (
+    <svg viewBox="0 0 200 112" width="100%" style={{ maxWidth: 260 }} role="img" aria-label={`Risk level ${risk || "loading"}`}>
+      {segments.map(s => (
+        <path
+          key={s.key}
+          d={arc(s.from, s.to)}
+          fill="none"
+          stroke={RISK[s.key]}
+          strokeWidth="15"
+          strokeLinecap="round"
+          opacity={risk === s.key ? 1 : 0.3}
+        />
+      ))}
+      <g
+        style={{
+          transform: `rotate(${rotation}deg)`,
+          transformOrigin: "100px 100px",
+          transition: "transform 1.1s cubic-bezier(.3,1.4,.5,1)"
+        }}
+      >
+        <line x1="100" y1="100" x2="100" y2="38" stroke={needle} strokeWidth="4" strokeLinecap="round" />
+      </g>
+      <circle cx="100" cy="100" r="8" fill={needle} />
+    </svg>
+  );
+}
