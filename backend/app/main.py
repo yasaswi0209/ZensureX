@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.db.session import engine, Base
 import app.db.base  # noqa: F401  (registers all models)
@@ -7,6 +8,20 @@ from app.db.schema import ensure_schema
 
 Base.metadata.create_all(bind=engine)
 ensure_schema(engine)
+
+
+def add_gps_columns():
+    """Adds GPS columns to the existing users table (safe to run repeatedly)."""
+    with engine.begin() as conn:
+        conn.execute(text("""
+            ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS location_updated_at TIMESTAMP WITH TIME ZONE
+        """))
+
+
+add_gps_columns()
 
 app = FastAPI()
 
