@@ -19,18 +19,29 @@ def gps_zone(lat: float, lon: float) -> str:
 
 
 def zone_label(zone: str, city: str = "") -> str:
+    """For GPS zones, `city` should be the GPS place name (user.place), not typed text."""
     if zone.startswith("city:"):
         return zone[5:].title()
     return f"{city or 'Your area'} (~5 km zone)"
+
+
+def label_for_user(user: User) -> str:
+    """Convenience: picks the right name for the label."""
+    zone = zone_of_user(user)
+    if zone.startswith("gps:"):
+        return zone_label(zone, getattr(user, "place", None) or "")
+    return zone_label(zone)
 
 
 def zone_of_user(user: User) -> str:
     return user.zone or city_zone(user.location)
 
 
-def save_user_position(db, user: User, lat: float, lon: float) -> str:
+def save_user_position(db, user: User, lat: float, lon: float, place: str = "") -> str:
     user.last_lat, user.last_lon = lat, lon
     user.zone = gps_zone(lat, lon)
+    if place:
+        user.place = place.strip()[:80]
     db.commit()
     return user.zone
 
