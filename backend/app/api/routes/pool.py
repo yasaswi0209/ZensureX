@@ -2,7 +2,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-
+from datetime import datetime, timezone
+from pydantic import BaseModel, Field
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
@@ -27,3 +28,19 @@ def my_pool(db: Session = Depends(get_db), user: User = Depends(get_current_user
         "server_time": datetime.utcnow().isoformat(),
     })
     return data
+class LocationIn(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+@router.post("/location")
+def save_location(
+    data: LocationIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    user.lat = data.lat
+    user.lon = data.lon
+    user.location_updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
