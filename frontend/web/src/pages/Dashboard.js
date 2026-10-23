@@ -387,9 +387,7 @@ function Dashboard() {
 
             <p className="zx-loc">
               <span className="zx-live-dot" />
-              {usingGps ? "Live location" : shownCity}
-              {usingGps && data?.city ? ` (profile city: ${data.city})` : ""}
-              {updatedAt ? `  •  Updated ${updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+             {shownCity}
             </p>
 
             <div className="zx-temp-row">
