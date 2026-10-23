@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float
 from app.db.session import Base
+from sqlalchemy import Column, Float, DateTime
 
 
 class User(Base):
@@ -17,7 +18,10 @@ class User(Base):
     phone = Column(String)
     upi = Column(String)
     bank_name = Column(String)
-
+    # Add inside your existing User class
+    lat = Column(Float, nullable=True)
+    lon = Column(Float, nullable=True)
+    location_updated_at = Column(DateTime(timezone=True), nullable=True)
     # last known GPS position and the pool zone it maps to
     last_lat = Column(Float, nullable=True)
     last_lon = Column(Float, nullable=True)
