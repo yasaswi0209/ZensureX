@@ -172,13 +172,43 @@ function RiskGauge({ risk }) {
     </svg>
   );
 }
+async function lookupPlace(lat, lon) {
+  try {
+    const r = await axios.get(
+      "https://nominatim.openstreetmap.org/reverse",
+      {
+        params: {
+          format: "jsonv2",
+          lat,
+          lon,
+          zoom: 12
+        },
+        timeout: 5000
+      }
+    );
 
+    const a = r.data.address || {};
+
+    return (
+      a.city ||
+      a.town ||
+      a.village ||
+      a.suburb ||
+      a.city_district ||
+      a.neighbourhood ||
+      ""
+    );
+  } catch (e) {
+    return "";
+  }
+}
 function Dashboard() {
 
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [pool, setPool] = useState(null);
   const [position, setPosition] = useState([17.385, 78.4867]);
+  const [place, setPlace] = useState("");
   const [accuracy, setAccuracy] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [tick, setTick] = useState(0);
@@ -201,7 +231,7 @@ function Dashboard() {
   const rainMm = data?.weather?.rain_mm ?? 0;
   const aqi = data?.aqi ?? 0;
   const usingGps = data?.location_source === "gps";
-  const shownCity = data?.city || city || "Your area";
+  const shownCity = (usingGps && place) || data?.city || city || "Your area";
   const forecast = data?.forecast || null;
   const next6 = forecast?.h6?.risk || "";
 
@@ -327,12 +357,36 @@ function Dashboard() {
 
     navigator.geolocation.getCurrentPosition(
       pos => {
-        const { latitude, longitude, accuracy: acc } = pos.coords;
-        gpsUsed.current = true;
-        setPosition([latitude, longitude]);
-        setAccuracy(acc);
-        load({ lat: latitude, lon: longitude });
-      },
+  const { latitude, longitude, accuracy: acc } = pos.coords;
+
+  gpsUsed.current = true;
+
+  setPosition([latitude, longitude]);
+  setAccuracy(acc);
+
+  lookupPlace(latitude, longitude)
+    .then(name => {
+      if (name) setPlace(name);
+
+      return axios
+        .post(
+          `${API_BASE}/pool/location`,
+          {
+            lat: latitude,
+            lon: longitude,
+            place: name
+          },
+          { headers }
+        )
+        .catch(() => {});
+    })
+    .finally(() => {
+      load({
+        lat: latitude,
+        lon: longitude
+      });
+    });
+},
       () => byCity(),
       { timeout: 10000, enableHighAccuracy: true }
     );
