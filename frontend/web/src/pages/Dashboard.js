@@ -11,21 +11,123 @@ import {
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import axios from "axios";
+import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 
 import "leaflet/dist/leaflet.css";
 
 const API_BASE = "https://zensurex-backend.onrender.com";
 
-const chartData = [
-  { period: "Week 1", risk: 18 },
-  { period: "Week 2", risk: 32 },
-  { period: "Week 3", risk: 25 },
-  { period: "Week 4", risk: 40 }
-];
+const RISK_COLOR = { LOW: "#22c55e", MEDIUM: "#f59e0b", HIGH: "#ef4444" };
 
-const RISK_COLOR = { LOW: "green", MEDIUM: "orange", HIGH: "red" };
+const inr = n => Number(n || 0).toLocaleString("en-IN");
+
+// Pin drawn with inline SVG, so it never depends on Leaflet's default image files
+function makePin(color) {
+  return L.divIcon({
+    className: "",
+    iconSize: [32, 44],
+    iconAnchor: [16, 44],
+    popupAnchor: [0, -40],
+    html: `
+      <svg width="32" height="44" viewBox="0 0 32 44" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 0C7.2 0 0 7 0 15.7 0 27.5 16 44 16 44s16-16.5 16-28.3C32 7 24.8 0 16 0z"
+              fill="${color}" stroke="#ffffff" stroke-width="2"/>
+        <circle cx="16" cy="15.5" r="6" fill="#ffffff"/>
+      </svg>`
+  });
+}
+
+// Small "i" icon with a tooltip. Hover on desktop, tap on mobile.
+function InfoTip({ text }) {
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+
+  function show() {
+    if (!ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    const width = 230;
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - width / 2), window.innerWidth - width - 8);
+    setPos({ top: r.bottom + 8, left, width });
+  }
+
+  function hide() {
+    setPos(null);
+  }
+
+  useEffect(() => {
+    if (!pos) return;
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, [pos]);
+
+  return (
+    <>
+      <span
+        ref={ref}
+        role="button"
+        tabIndex={0}
+        aria-label="About the community pool"
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        onClick={e => {
+          e.stopPropagation();
+          pos ? hide() : show();
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 16,
+          height: 16,
+          borderRadius: "50%",
+          border: "1px solid #94a3b8",
+          color: "#64748b",
+          fontSize: 10,
+          fontWeight: 700,
+          fontStyle: "italic",
+          cursor: "help",
+          flexShrink: 0
+        }}
+      >
+        i
+      </span>
+
+      {pos &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{
+              position: "fixed",
+              top: pos.top,
+              left: pos.left,
+              width: pos.width,
+              background: "#0f172a",
+              color: "#f8fafc",
+              fontSize: 12,
+              lineHeight: 1.5,
+              padding: "10px 12px",
+              borderRadius: 8,
+              boxShadow: "0 8px 24px rgba(15,23,42,0.25)",
+              zIndex: 10000,
+              pointerEvents: "none"
+            }}
+          >
+            {text}
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
 
 function Dashboard() {
 
@@ -50,8 +152,6 @@ function Dashboard() {
   const usingGps = data?.location_source === "gps";
   const shownCity = data?.city || city || "Your area";
 
-  const inr = n => Number(n || 0).toLocaleString("en-IN");
-
   // Next payout: real state, not a fixed number
   let nextPayout = "Loading";
   let nextPayoutNote = "";
@@ -72,6 +172,10 @@ function Dashboard() {
 
   const forecast = data?.forecast || null;
   const next6 = forecast?.h6?.risk || "";
+
+  // Income Disruption Trend: real weekly payouts from the backend, no fake numbers
+  const trend = pool?.trend || [];
+  const hasTrend = trend.some(t => Number(t.payout) > 0);
 
   async function getCityCoordinates(cityName) {
     try {
@@ -136,7 +240,7 @@ function Dashboard() {
         load({ lat: latitude, lon: longitude });
       },
       () => byCity(),
-      { timeout: 8000 }
+      { timeout: 8000, enableHighAccuracy: true }
     );
   }, [city, navigate]);
 
@@ -163,7 +267,8 @@ function Dashboard() {
     updateLocation();
   }, [city, data?.city]);
 
-  const circleColor = RISK_COLOR[data?.risk] || "green";
+  const riskKey = data?.risk || "LOW";
+  const circleColor = RISK_COLOR[riskKey] || RISK_COLOR.LOW;
 
   const forecastRows = forecast
     ? [
@@ -171,6 +276,12 @@ function Dashboard() {
         { label: "Next 6h", slot: forecast.h6 }
       ]
     : [];
+
+  const legend = [
+    { key: "LOW", label: "Low" },
+    { key: "MEDIUM", label: "Medium" },
+    { key: "HIGH", label: "High" }
+  ];
 
   return (
 
@@ -262,32 +373,90 @@ function Dashboard() {
 
               <h3 className="dp-title">Your Location</h3>
 
-              <MapContainer
-                center={position}
-                key={position.toString()}
-                zoom={13}
-                className="map-rect"
-              >
+              <div style={{ position: "relative" }}>
 
-                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                <MapContainer
+                  center={position}
+                  key={position.toString()}
+                  zoom={14}
+                  className="map-rect"
+                >
 
-                <Marker position={position}>
-                  <Popup>You are here</Popup>
-                </Marker>
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
-                {data?.risk && (
-                  <Circle
-                    center={position}
-                    radius={800}
-                    pathOptions={{
-                      color: circleColor,
-                      fillColor: circleColor,
-                      fillOpacity: 0.4
-                    }}
-                  />
-                )}
+                  <Marker position={position} icon={makePin(circleColor)}>
+                    <Popup>
+                      <b>{usingGps ? "You are here" : "Saved city (approximate)"}</b>
+                      <br />
+                      Risk: {data?.risk || "Loading"}
+                    </Popup>
+                  </Marker>
 
-              </MapContainer>
+                  {data?.risk && (
+                    <Circle
+                      center={position}
+                      radius={800}
+                      pathOptions={{
+                        color: circleColor,
+                        fillColor: circleColor,
+                        fillOpacity: 0.25,
+                        weight: 2
+                      }}
+                    />
+                  )}
+
+                </MapContainer>
+
+                {/* RISK LEGEND */}
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 10,
+                    bottom: 10,
+                    zIndex: 1000,
+                    background: "rgba(255,255,255,0.95)",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    fontSize: 11,
+                    boxShadow: "0 2px 8px rgba(15,23,42,0.15)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 3
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {legend.map(l => (
+                      <span
+                        key={l.key}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontWeight: data?.risk === l.key ? 700 : 400,
+                          color: "#334155"
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 9,
+                            height: 9,
+                            borderRadius: "50%",
+                            background: RISK_COLOR[l.key],
+                            display: "inline-block"
+                          }}
+                        />
+                        {l.label}
+                      </span>
+                    ))}
+                  </div>
+                  {data && (
+                    <span style={{ color: "#64748b" }}>
+                      {usingGps ? "Exact GPS location" : "Approximate: saved city"}
+                    </span>
+                  )}
+                </div>
+
+              </div>
 
             </motion.div>
 
@@ -297,31 +466,55 @@ function Dashboard() {
 
               <h3 className="dp-title">Income Disruption Trend</h3>
 
-              <ResponsiveContainer width="100%" height={260}>
+              {!pool ? (
+                <p className="muted">Loading...</p>
+              ) : !hasTrend ? (
+                <div
+                  style={{
+                    height: 260,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    textAlign: "center",
+                    gap: 4,
+                    border: "1px dashed #e2e8f0",
+                    borderRadius: 12
+                  }}
+                >
+                  <p style={{ margin: 0, fontWeight: 600 }}>No disruptions recorded yet</p>
+                  <p className="muted" style={{ margin: 0 }}>
+                    Weekly payouts appear here after your first approved claim.
+                  </p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
 
-                <BarChart data={chartData}>
+                  <BarChart data={trend}>
 
-                  <defs>
-                    <linearGradient id="riskColor">
-                      <stop offset="5%" stopColor="#ff4d4f" />
-                      <stop offset="95%" stopColor="#ef4444" />
-                    </linearGradient>
-                  </defs>
+                    <defs>
+                      <linearGradient id="riskColor">
+                        <stop offset="5%" stopColor="#ff4d4f" />
+                        <stop offset="95%" stopColor="#ef4444" />
+                      </linearGradient>
+                    </defs>
 
-                  <CartesianGrid stroke="#f1f5f9" />
-                  <XAxis dataKey="period" />
-                  <YAxis />
-                  <Tooltip />
+                    <CartesianGrid stroke="#f1f5f9" />
+                    <XAxis dataKey="period" />
+                    <YAxis tickFormatter={v => `₹${v}`} />
+                    <Tooltip formatter={v => [`₹${inr(v)}`, "Payout"]} />
 
-                  <Bar
-                    dataKey="risk"
-                    fill="url(#riskColor)"
-                    radius={[8, 8, 0, 0]}
-                  />
+                    <Bar
+                      dataKey="payout"
+                      name="Payout"
+                      fill="url(#riskColor)"
+                      radius={[8, 8, 0, 0]}
+                    />
 
-                </BarChart>
+                  </BarChart>
 
-              </ResponsiveContainer>
+                </ResponsiveContainer>
+              )}
 
             </motion.div>
 
@@ -357,9 +550,16 @@ function Dashboard() {
                 className="dash-stat-card glass pool-card clickable"
                 onClick={() => navigate("/pool")}
               >
-                <p className="dsc-label">👥 Community Pool</p>
+                <p className="dsc-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  👥 Community Pool
+                  <InfoTip text="Workers in your area share a small weekly premium. When rain, heat or pollution disrupts work, payouts are paid from this shared pool. Tap the card to see members and activity." />
+                </p>
                 <h3 className="card-value">{pool ? `₹${inr(pool.balance)}` : "Loading"}</h3>
-                {pool ? <p className="muted">{pool.member_count} members • {pool.zone_label}</p> : null}
+                {pool ? (
+                  <p className="muted">
+                    {pool.member_count} {pool.member_count === 1 ? "member" : "members"} • {pool.zone_label}
+                  </p>
+                ) : null}
               </motion.div>
 
               <motion.div className="dash-stat-card glass plan-card">
