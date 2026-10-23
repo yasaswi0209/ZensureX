@@ -4,6 +4,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   CartesianGrid,
   ResponsiveContainer
 } from "recharts";
@@ -16,6 +17,14 @@ import axios from "axios";
 const API_BASE = "https://zensurex-backend.onrender.com";
 
 const inr = n => Number(n || 0).toLocaleString("en-IN");
+
+// Keeps every stat card the same height with its content centred
+const statCardStyle = {
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  minHeight: 150
+};
 
 
 function PoolDetails(){
@@ -34,9 +43,16 @@ function PoolDetails(){
   const workers = pool?.members || [];
   const payoutTrend = pool?.trend || [];
 
+  // true only when at least one week has real money in it
+  const hasTrend = payoutTrend.some(
+    t => Number(t.contribution) > 0 || Number(t.payout) > 0
+  );
+
   const filteredWorkers = workers.filter(w =>
     w.name.toLowerCase().includes(search.toLowerCase())
   );
+
+  const memberLabel = pool?.member_count === 1 ? "active member" : "active members";
 
 
   return(
@@ -92,7 +108,8 @@ for workers in your area.
 
 <motion.div
 className="dash-stat-card glass"
-whileHover={{scale:1.05}}
+style={statCardStyle}
+whileHover={{scale:1.03}}
 >
 
 <p className="dsc-label">
@@ -104,7 +121,7 @@ Pool Balance
 </h3>
 
 <p className="muted">
-{pool ? pool.zone_label : "community protection fund"}
+{pool ? `${pool.zone_label} • premiums plus seed funds` : "community protection fund"}
 </p>
 
 </motion.div>
@@ -113,7 +130,8 @@ Pool Balance
 
 <motion.div
 className="dash-stat-card glass"
-whileHover={{scale:1.05}}
+style={statCardStyle}
+whileHover={{scale:1.03}}
 >
 
 <p className="dsc-label">
@@ -125,7 +143,7 @@ Workers
 </h3>
 
 <p className="muted">
-active members in your zone
+{pool ? `${memberLabel} in your zone` : "active members in your zone"}
 </p>
 
 </motion.div>
@@ -134,7 +152,8 @@ active members in your zone
 
 <motion.div
 className="dash-stat-card glass"
-whileHover={{scale:1.05}}
+style={statCardStyle}
+whileHover={{scale:1.03}}
 >
 
 <p className="dsc-label">
@@ -155,7 +174,8 @@ Premiums Collected
 
 <motion.div
 className="dash-stat-card glass"
-whileHover={{scale:1.05}}
+style={statCardStyle}
+whileHover={{scale:1.03}}
 >
 
 <p className="dsc-label">
@@ -191,6 +211,36 @@ Contribution vs Payout (last 4 weeks)
 </h3>
 
 
+{!pool ? (
+
+<p className="muted">Loading...</p>
+
+) : !hasTrend ? (
+
+<div
+style={{
+height:320,
+display:"flex",
+flexDirection:"column",
+alignItems:"center",
+justifyContent:"center",
+textAlign:"center",
+gap:4,
+border:"1px dashed #e2e8f0",
+borderRadius:12
+}}
+>
+
+<p style={{margin:0,fontWeight:600}}>No activity in the last 4 weeks</p>
+
+<p className="muted" style={{margin:0}}>
+Bars appear when members pay premiums or claims are paid out.
+</p>
+
+</div>
+
+) : (
+
 <ResponsiveContainer width="100%" height={320}>
 
 <BarChart data={payoutTrend}>
@@ -199,9 +249,11 @@ Contribution vs Payout (last 4 weeks)
 
 <XAxis dataKey="period"/>
 
-<YAxis/>
+<YAxis tickFormatter={v => `₹${v}`}/>
 
-<Tooltip/>
+<Tooltip formatter={(v, name) => [`₹${inr(v)}`, name]}/>
+
+<Legend/>
 
 
 <defs>
@@ -228,6 +280,7 @@ Contribution vs Payout (last 4 weeks)
 
 <Bar
 dataKey="contribution"
+name="Contribution"
 fill="url(#greenGradient)"
 radius={[8,8,0,0]}
 />
@@ -235,6 +288,7 @@ radius={[8,8,0,0]}
 
 <Bar
 dataKey="payout"
+name="Payout"
 fill="url(#redGradient)"
 radius={[8,8,0,0]}
 />
@@ -243,6 +297,8 @@ radius={[8,8,0,0]}
 </BarChart>
 
 </ResponsiveContainer>
+
+)}
 
 
 <p className="muted">
@@ -306,8 +362,12 @@ onChange={(e)=>setSearch(e.target.value)}
 
 {error && <p className="muted">{error}</p>}
 
-{pool && filteredWorkers.length === 0 && (
+{pool && workers.length === 0 && (
 <p className="muted">No active members yet. Members appear when they confirm a plan.</p>
+)}
+
+{pool && workers.length > 0 && filteredWorkers.length === 0 && (
+<p className="muted">No member matches "{search}".</p>
 )}
 
 {filteredWorkers.map((w,i)=>(
@@ -315,7 +375,7 @@ onChange={(e)=>setSearch(e.target.value)}
 <motion.div
 key={`${w.name}-${i}`}
 className="worker-card modern-card grid-worker"
-whileHover={{scale:1.02}}
+whileHover={{scale:1.01}}
 >
 
 {/* NAME */}
@@ -355,7 +415,7 @@ whileHover={{scale:1.02}}
 
 <span className="paid">
 
-₹{inr(w.payout)}
+₹{inr(w.payout)} paid
 
 </span>
 
