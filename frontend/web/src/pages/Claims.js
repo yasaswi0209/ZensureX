@@ -79,9 +79,11 @@ axios.get(`https://zensurex-backend.onrender.com/settings/${user.id}`)
 }, []);
 
 
-// 🔥 FETCH RECENT CLAIMS (FIXED)
+// 🔥 FETCH RECENT CLAIMS (only this worker's, needs login)
 useEffect(() => {
-axios.get("https://zensurex-backend.onrender.com/claims/recent")
+axios.get("https://zensurex-backend.onrender.com/claims/recent", {
+headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
+})
 .then(res => setRecentClaims(res.data))
 .catch(err => console.error(err));
 }, []);
@@ -98,8 +100,6 @@ autoTriggerClaim();
 async function autoTriggerClaim(){
 try{
 
-const user = JSON.parse(localStorage.getItem("user"));
-
 const city = localStorage.getItem("city") || "Hyderabad";
 
 // 🌦️ GET LIVE WEATHER
@@ -107,12 +107,13 @@ const weatherRes = await axios.get(
   `https://zensurex-backend.onrender.com/claims/weather/${city}`
 );
 
-// 🚀 AUTO CLAIM
-const res = await axios.post("https://zensurex-backend.onrender.com/claims/auto", {
-  user_id: user?.id,
-  city: city,
-  trigger: selected
-});
+// 🚀 AUTO CLAIM (the backend uses the logged-in worker)
+const token = localStorage.getItem("token");
+const res = await axios.post(
+  "https://zensurex-backend.onrender.com/claims/auto",
+  { trigger: selected },
+  { headers: { Authorization: `Bearer ${token}` } }
+);
 
 const data = res.data;
 
@@ -137,6 +138,8 @@ setRisk("medium");
 setRisk("high");
 }
 
+} else {
+setStatus("rejected");
 }
 
 }catch(err){
@@ -223,7 +226,7 @@ setOpen(false);
 </motion.div>
 
 
-{/* 🔥 RECENT CLAIMS (FIXED) */}
+{/* 🔥 RECENT CLAIMS */}
 <motion.div className="dashboard-panel">
 <h3 className="dp-title">Recent Claims</h3>
 
