@@ -20,16 +20,16 @@ class User(Base):
     location = Column(String, nullable=False)
     weekly_income = Column(Integer, nullable=False)
 
-    phone = Column(String)
-    upi = Column(String)
-    bank_name = Column(String)
+    phone = Column(String, nullable=True)
+    upi = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
 
     # Current GPS position
     lat = Column(Float, nullable=True)
     lon = Column(Float, nullable=True)
     location_updated_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Last known GPS position and pool zone
+    # Last known GPS position and the pool zone it maps to
     last_lat = Column(Float, nullable=True)
     last_lon = Column(Float, nullable=True)
     zone = Column(String, nullable=True)
