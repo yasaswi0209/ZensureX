@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from typing import Optional
 
 from app.db.session import get_db
 from app.schemas.insurance_schema import InsuranceCreate
@@ -11,6 +12,9 @@ from app.services.insurance_service import (
     get_latest_policy
 )
 from app.models.insurance import Insurance
+from app.ml.premium_model import calculate_premium
+from app.services.pricing import COVERAGE, plan_prices
+from app.services import zone_pool
 
 router = APIRouter(prefix="/insurance", tags=["Insurance"])
 
@@ -86,8 +90,6 @@ def get_policy_lock_status(
         if not policy:
             return {}
 
-        print("FETCH LOCK:", policy.locked_until)  # DEBUG
-
         return {
             "plan": policy.plan_name,
             "locked_until": policy.locked_until.isoformat() if policy.locked_until else None
@@ -98,67 +100,68 @@ def get_policy_lock_status(
         raise HTTPException(status_code=500, detail="Failed to fetch lock status")
 
 
-# 🚀 UPGRADE PLAN (FINAL VERSION)
+# 🚀 UPGRADE PLAN
 @router.post("/upgrade")
 def upgrade_plan(
     plan: str,
+    quoted_price: Optional[float] = None,
     db: Session = Depends(get_db),
     user = Depends(get_current_user)
 ):
+    coverage = COVERAGE.get(plan)
+    if coverage is None:
+        raise HTTPException(status_code=400, detail="Invalid plan")
+
+    now = datetime.utcnow()
+    policy = get_latest_policy(db, user.id)
+
+    # 🔒 LOCK IS ENFORCED HERE, not only in the browser
+    if policy and policy.locked_until and policy.locked_until > now:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Plan is locked until {policy.locked_until.strftime('%d %b %Y, %I:%M %p')} UTC"
+        )
+
     try:
+        # Server decides the price. The page's quote is only accepted inside a sane band.
+        base = float(calculate_premium(user.location)["premium"])
+        if quoted_price is None or not (base * 0.9 <= quoted_price <= base * 1.25):
+            quoted_price = base
+        premium = plan_prices(quoted_price)[plan]
 
-        premium_map = {
-            "Basic": 20,
-            "Moderate": 50,
-            "Premium": 100
-        }
-
-        coverage_map = {
-            "Basic": 5000,
-            "Moderate": 10000,
-            "Premium": 20000
-        }
-
-        premium = premium_map.get(plan)
-        coverage = coverage_map.get(plan)
-
-        if premium is None or coverage is None:
-            raise HTTPException(status_code=400, detail="Invalid plan")
-
-        policy = get_latest_policy(db, user.id)
-
-        # 🔥 UPDATE OR CREATE
         if policy:
             policy.plan_name = plan
             policy.premium = premium
             policy.coverage = coverage
+            policy.status = "ACTIVE"
             action = "updated"
         else:
             policy = Insurance(
-                user_id=user.id,
-                plan_name=plan,
-                premium=premium,
-                coverage=coverage
+                user_id=user.id, plan_name=plan, premium=premium,
+                coverage=coverage, status="ACTIVE"
             )
             db.add(policy)
             action = "created"
 
-        # 🔒 LOCK FOR 7 DAYS (CORE FEATURE)
-        policy.locked_until = datetime.utcnow() + timedelta(days=7)
-
-        # ✅ SAVE
+        policy.locked_until = now + timedelta(days=7)
         db.commit()
         db.refresh(policy)
 
-        print("LOCK SET:", policy.locked_until)  # DEBUG
+        # the weekly premium goes into the worker's zone pool
+        zone = zone_pool.zone_of_user(user)
+        zone_pool.add_premium(db, zone, user.id, premium, plan)
 
         return {
             "message": f"Plan upgraded successfully 🚀 ({action})",
             "plan": policy.plan_name,
             "premium": policy.premium,
+            "coverage": policy.coverage,
             "locked_until": policy.locked_until.isoformat()
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
+        db.rollback()
         print("ERROR:", e)
         raise HTTPException(status_code=500, detail="Failed to upgrade plan")
