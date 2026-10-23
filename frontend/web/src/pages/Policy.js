@@ -265,7 +265,7 @@ function Policy() {
         `${API_BASE}/insurance/upgrade`,
         null,
         {
-          params: { plan: selectedPlan.name },
+          params: { plan: selectedPlan.name, quoted_price: price },
           headers: { Authorization: `Bearer ${token}` }
         }
       );
