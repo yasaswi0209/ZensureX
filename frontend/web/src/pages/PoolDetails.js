@@ -50,7 +50,15 @@ async function lookupPlace(lat, lon) {
       timeout: 5000
     });
     const a = r.data.address || {};
-    return a.suburb || a.city_district || a.neighbourhood || a.city || a.town || a.village || "";
+    return (
+  a.city ||
+  a.town ||
+  a.village ||
+  a.suburb ||
+  a.city_district ||
+  a.neighbourhood ||
+  ""
+);
   } catch (e) {
     return "";
   }
