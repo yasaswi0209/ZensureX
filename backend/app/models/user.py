@@ -1,4 +1,3 @@
-```python
 from sqlalchemy import Column, Integer, String, Float, DateTime
 
 from app.db.session import Base
