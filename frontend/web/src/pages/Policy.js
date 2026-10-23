@@ -38,7 +38,7 @@ function Policy(){
       const token = localStorage.getItem("token");
 
       const res = await axios.post(
-        "https://guidewire-final.onrender.com/claims/auto",
+        "https://zensurex-backend.onrender.com/claims/auto",
         { reason: reasonText },
         {
           headers:{
@@ -67,7 +67,7 @@ function Policy(){
         }
 
         const res = await axios.get(
-          "https://guidewire-final.onrender.com/risk/",
+          "https://zensurex-backend.onrender.com/risk/",
           {
             headers:{
               Authorization: `Bearer ${token}`
@@ -126,7 +126,7 @@ function Policy(){
       const token = localStorage.getItem("token");
 
       const res = await axios.get(
-        "https://guidewire-final.onrender.com/insurance/me",
+        "https://zensurex-backend.onrender.com/insurance/me",
         {
           headers:{
             Authorization: `Bearer ${token}`
@@ -249,7 +249,7 @@ useEffect(() => {
     const token = localStorage.getItem("token");
 
     const res = await axios.post(
-      "https://guidewire-final.onrender.com/insurance/upgrade",
+      "https://zensurex-backend.onrender.com/insurance/upgrade",
       null,
       {
         params: {

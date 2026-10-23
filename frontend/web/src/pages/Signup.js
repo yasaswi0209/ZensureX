@@ -25,7 +25,7 @@ function Signup(){
   try{
 
     await axios.post(
-      "https://guidewire-final.onrender.com/auth/signup",
+      "https://zensurex-backend.onrender.com/auth/signup",
       {
         name,
         email,

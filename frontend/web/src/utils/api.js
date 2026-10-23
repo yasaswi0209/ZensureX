@@ -1,4 +1,4 @@
-const BASE_URL = "https://guidewire-final.onrender.com";
+const BASE_URL = "https://zensurex-backend.onrender.com";
 
 export const signupUser = async (data) => {
   const res = await fetch(`${BASE_URL}/auth/signup`, {

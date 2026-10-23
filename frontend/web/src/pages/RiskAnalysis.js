@@ -67,7 +67,7 @@ useEffect(() => {
     const city = user?.city || "Hyderabad";
 
       const res = await axios.get(
-        `https://guidewire-final.onrender.com/claims/weather/${city}`
+        `https://zensurex-backend.onrender.com/claims/weather/${city}`
       );
 
       const data = res.data;
@@ -123,7 +123,7 @@ async function calculateRisk(){
 
   try {
     const res = await axios.post(
-      "https://guidewire-final.onrender.com/claims/risk",
+      "https://zensurex-backend.onrender.com/claims/risk",
       {
         weather: weather,
         aqi: Number(pollution)

@@ -24,7 +24,7 @@ function Profile() {
   const token = localStorage.getItem("token");
 
   // ✅ BASE URL (DEPLOY SAFE)
-  const API = process.env.REACT_APP_API_URL || "https://guidewire-final.onrender.com";
+  const API = process.env.REACT_APP_API_URL || "https://zensurex-backend.onrender.com";
 
   // 🔥 FETCH PROFILE (FIXED ROUTE)
   useEffect(() => {

@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../pages/AuthContext";
 
-const BASE_URL = "https://guidewire-final.onrender.com";
+const BASE_URL = "https://zensurex-backend.onrender.com";
 
 function Login() {
 

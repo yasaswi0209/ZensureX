@@ -92,7 +92,7 @@ function PaymentSetup(){
     }
 
     await axios.post(
-      "https://guidewire-final.onrender.com/settings/save",
+      "https://zensurex-backend.onrender.com/settings/save",
       {
         phone,
         upi,

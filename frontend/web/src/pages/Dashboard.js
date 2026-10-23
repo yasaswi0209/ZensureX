@@ -110,7 +110,7 @@ async function getCityCoordinates(city) {
       const token = localStorage.getItem("token");
 
       const res = await axios.get(
-        `https://guidewire-final.onrender.com/risk?city=${city}`,
+        `https://zensurex-backend.onrender.com/risk?city=${city}`,
         {
           headers: {
             Authorization: `Bearer ${token}`
@@ -140,7 +140,7 @@ useEffect(() => {
       const token = localStorage.getItem("token");
 
       const res = await axios.get(
-        `https://guidewire-final.onrender.com/risk?city=${city}`,
+        `https://zensurex-backend.onrender.com/risk?city=${city}`,
         {
           headers: {
             Authorization: `Bearer ${token}`
@@ -184,7 +184,7 @@ async function upgradePlan(selectedPlan){
     const token = localStorage.getItem("token");
 
     const res = await axios.post(
-      "https://guidewire-final.onrender.com/insurance/upgrade",
+      "https://zensurex-backend.onrender.com/insurance/upgrade",
       null,
       {
         params:{ plan: selectedPlan },
