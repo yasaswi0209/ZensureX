@@ -19,6 +19,7 @@ import "leaflet/dist/leaflet.css";
 import "../styles/zensurex-ui.css";
 import RainCanvas from "../components/RainCanvas";
 import CountUp from "../components/CountUp";
+   import Assistant from "../components/Assistant";
 
 const API_BASE = "https://zensurex-backend.onrender.com";
 
@@ -660,7 +661,7 @@ function Dashboard() {
         </div>
 
       </div>
-
+               <Assistant />
     </section>
 
   );
