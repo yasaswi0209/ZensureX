@@ -1,3 +1,4 @@
+
 import { useContext, useState, useEffect, useMemo, useRef } from "react";
 import { AppContext } from "../utils/AppContext";
 import { motion, AnimatePresence } from "framer-motion";
@@ -6,10 +7,43 @@ import axios from "axios";
 
 const API_BASE = "https://zensurex-backend.onrender.com";
 
-const RISK_COLOR = { LOW: "green", MEDIUM: "#f59e0b", HIGH: "#ef4444" };
+const RISK_COLOR = {
+  LOW: "green",
+  MEDIUM: "#f59e0b",
+  HIGH: "#ef4444",
+};
+
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) {
+      resolve(true);
+      return;
+    }
+
+    const existingScript = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
+    );
+
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(true), {
+        once: true,
+      });
+      existingScript.addEventListener("error", () => resolve(false), {
+        once: true,
+      });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
 
 function Policy() {
-
   const navigate = useNavigate();
   const { plan, setPlan } = useContext(AppContext);
 
@@ -28,43 +62,42 @@ function Policy() {
   const [locationSource, setLocationSource] = useState("saved_city");
   const [dataFallback, setDataFallback] = useState(false);
 
-  // LOCK SYSTEM
+  // Policy lock
   const [isLocked, setIsLocked] = useState(false);
   const [lockMessage, setLockMessage] = useState("");
   const [countdown, setCountdown] = useState("");
   const [lockDate, setLockDate] = useState(null);
-  const [toast, setToast] = useState(null);
-  const [paymentOpen, setPaymentOpen] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("qr");
 
+  // Toast and payment state
+  const [toast, setToast] = useState(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const paymentInProgress = useRef(false);
   const claimFired = useRef(false);
 
   function showToast(message, type = "success") {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
   }
 
-  // AUTO CLAIM
+  // Automatic claim trigger
   async function autoTriggerClaim(reasonText) {
     try {
       const token = localStorage.getItem("token");
 
       const res = await axios.post(
         `${API_BASE}/claims/auto`,
-        { reason: reasonText },
+        { reason: reasonText || "Severe weather conditions" },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
       showToast(`💰 Auto Claim Approved ₹${res.data.amount}`, "success");
-
     } catch (err) {
       console.error("Auto claim failed", err);
     }
   }
 
-  // FETCH RISK: GPS first, saved city as fallback
+  // Fetch risk: GPS first, saved city as fallback
   useEffect(() => {
-
     const token = localStorage.getItem("token");
 
     if (!token) {
@@ -93,8 +126,9 @@ function Policy() {
       setLocationSource(data.location_source || "saved_city");
       setDataFallback(Boolean(data.data_fallback));
 
-      // Auto claim only on real HIGH conditions NOW (not forecast) and real data
-      const severe = rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
+      const severe =
+        rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
+
       if (severe && !data.data_fallback && !claimFired.current) {
         claimFired.current = true;
         autoTriggerClaim(data.reason);
@@ -103,7 +137,10 @@ function Policy() {
 
     async function load(params) {
       try {
-        const res = await axios.get(`${API_BASE}/risk/`, { headers, params });
+        const res = await axios.get(`${API_BASE}/risk/`, {
+          headers,
+          params,
+        });
         applyData(res.data);
       } catch (err) {
         if (err.response?.status === 401) {
@@ -112,12 +149,14 @@ function Policy() {
           navigate("/login");
           return;
         }
+
         if (params && params.lat !== undefined) {
           load({});
           return;
         }
+
         console.error(err);
-        showToast("Failed to load data ❌", "error");
+        showToast("Failed to load risk data ❌", "error");
       }
     }
 
@@ -127,65 +166,68 @@ function Policy() {
     }
 
     navigator.geolocation.getCurrentPosition(
-      pos => load({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      (pos) =>
+        load({
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+        }),
       () => load({}),
       { timeout: 8000 }
     );
-
   }, [navigate]);
 
-  // EXISTING POLICY / LOCK
+  // Fetch current policy and lock
   useEffect(() => {
-
     async function fetchPolicy() {
       try {
         const token = localStorage.getItem("token");
+        if (!token) return;
 
         const res = await axios.get(`${API_BASE}/insurance/me`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${token}` },
         });
 
         const data = res.data;
 
-        if (data?.plan && typeof setPlan === "function") {
+        if (data?.plan) {
           setPlan(data.plan);
         }
 
         if (data?.locked_until) {
           const lock = new Date(data.locked_until);
-          const now = new Date();
 
-          if (lock > now) {
+          if (lock > new Date()) {
             setIsLocked(true);
             setLockDate(lock);
 
-            const diff = Math.ceil((lock - now) / (1000 * 60 * 60 * 24));
-            setLockMessage(`Plan locked 🔒 (${diff} days remaining)`);
+            const days = Math.ceil(
+              (lock.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+            );
+
+            setLockMessage(`Plan locked 🔒 (${days} days remaining)`);
+          } else {
+            setIsLocked(false);
           }
         }
-
       } catch (err) {
-        console.log("No existing policy");
+        console.log("Could not fetch existing policy", err);
       }
     }
 
     fetchPolicy();
+  }, [setPlan]);
 
-  }, []);
-
-  // LOCK COUNTDOWN
+  // Lock countdown
   useEffect(() => {
-
     if (!isLocked || !lockDate) return;
 
     const interval = setInterval(() => {
-
-      const now = new Date();
-      const diff = lockDate - now;
+      const diff = lockDate.getTime() - Date.now();
 
       if (diff <= 0) {
         setCountdown("Unlocked ✅");
         setIsLocked(false);
+        setLockMessage("");
         clearInterval(interval);
         return;
       }
@@ -196,11 +238,9 @@ function Policy() {
       const s = Math.floor((diff / 1000) % 60);
 
       setCountdown(`${d}d ${h}h ${m}m ${s}s`);
-
     }, 1000);
 
     return () => clearInterval(interval);
-
   }, [isLocked, lockDate]);
 
   useEffect(() => {
@@ -209,7 +249,7 @@ function Policy() {
     }
   }, [outlookRisk, isLocked]);
 
-  // Prices always go up: Basic < Moderate < Premium
+  // Plan display prices. The backend determines the final payable amount.
   const plans = useMemo(() => {
     const base = price > 0 ? price : 20;
     const moderate = Math.round(base * 1.25);
@@ -220,87 +260,228 @@ function Policy() {
         name: "Basic",
         price: base,
         desc: "Low risk coverage",
-        features: ["Rain protection", "Low demand cover", "UPI payout"]
+        features: ["Rain protection", "Low demand cover", "UPI payout"],
       },
       {
         name: "Moderate",
         price: moderate,
         desc: "Balanced coverage",
-        features: ["Rain protection", "Pollution cover", "Demand drop cover", "UPI payout"]
+        features: [
+          "Rain protection",
+          "Pollution cover",
+          "Demand drop cover",
+          "UPI payout",
+        ],
       },
       {
         name: "Premium",
         price: premium,
         desc: "Full AI protection",
-        features: ["Rain + heat cover", "Accident protection", "Demand drop cover", "Priority payout", "Peak bonus"]
-      }
+        features: [
+          "Rain + heat cover",
+          "Accident protection",
+          "Demand drop cover",
+          "Priority payout",
+          "Peak bonus",
+        ],
+      },
     ];
   }, [price]);
 
-  // Locked: show the user's plan. Not locked: pre-select the recommended plan.
+  // Keep the current plan selected when locked.
   useEffect(() => {
     if (isLocked && plan) {
-      const mine = plans.find(p => p.name === plan);
+      const mine = plans.find((p) => p.name === plan);
       if (mine) setSelectedPlan(mine);
       return;
     }
+
     if (recommendedPlan) {
-      const auto = plans.find(p => p.name === recommendedPlan);
-      if (auto) setSelectedPlan(auto);
+      const recommended = plans.find((p) => p.name === recommendedPlan);
+      if (recommended) setSelectedPlan(recommended);
     }
   }, [recommendedPlan, plans, isLocked, plan]);
 
-  // CONFIRM PLAN
+  // Create an order and open real Razorpay Checkout.
   async function handleConfirm() {
-
-    if (isLocked) return;
+    if (isLocked || paymentInProgress.current) return;
 
     if (!selectedPlan) {
       showToast("Please select a plan ⚠️", "error");
       return;
     }
 
-    try {
-      const token = localStorage.getItem("token");
+    const token = localStorage.getItem("token");
 
-      const res = await axios.post(
-        `${API_BASE}/insurance/upgrade`,
-        null,
+    if (!token) {
+      showToast("Please login again ⚠️", "error");
+      navigate("/login");
+      return;
+    }
+
+    paymentInProgress.current = true;
+    setPaymentLoading(true);
+
+    try {
+      const scriptLoaded = await loadRazorpayScript();
+
+      if (!scriptLoaded || !window.Razorpay) {
+        throw new Error("Could not load Razorpay Checkout. Please try again.");
+      }
+
+      // The backend calculates the final price and creates the order.
+      const orderResponse = await axios.post(
+        `${API_BASE}/insurance/create-order`,
         {
-          params: { plan: selectedPlan.name, quoted_price: price },
-          headers: { Authorization: `Bearer ${token}` }
+          plan: selectedPlan.name,
+          quoted_price: price,
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` },
         }
       );
 
-      setPlan(res.data.plan);
+      const order = orderResponse.data;
 
-      setIsLocked(true);
-
-      const lock = new Date();
-      lock.setDate(lock.getDate() + 7);
-      setLockDate(lock);
-
-      setLockMessage("Plan locked for 7 days 🔒");
-
-      showToast("✅ Plan Activated!", "success");
-
-    } catch (err) {
-      console.error(err);
-
-      if (err.response?.status === 400 || err.response?.status === 409) {
-        showToast(err.response.data.detail, "error");
-      } else {
-        showToast("Upgrade failed ❌", "error");
+      if (!order.order_id || !order.key_id || !order.amount) {
+        throw new Error("The server returned an invalid payment order.");
       }
+
+      const options = {
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency || "INR",
+        name: "ZensureX",
+        description: `${order.plan} Insurance Policy`,
+        order_id: order.order_id,
+
+        notes: {
+          plan: order.plan,
+        },
+
+        theme: {
+          color: "#4f46e5",
+        },
+
+        modal: {
+          ondismiss: () => {
+            paymentInProgress.current = false;
+            setPaymentLoading(false);
+            showToast(
+              "Checkout closed. Your policy has not been activated.",
+              "error"
+            );
+          },
+        },
+
+        handler: async (response) => {
+          try {
+            // Never activate a policy from the browser callback alone.
+            // The backend verifies the signature and payment status.
+            const verifyResponse = await axios.post(
+              `${API_BASE}/insurance/verify-payment`,
+              {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              },
+              {
+                headers: { Authorization: `Bearer ${token}` },
+              }
+            );
+
+            const verified = verifyResponse.data;
+
+            setPlan(verified.plan);
+
+            if (verified.locked_until) {
+              const lock = new Date(verified.locked_until);
+              setLockDate(lock);
+              setIsLocked(lock > new Date());
+              setLockMessage("Plan locked for 7 days 🔒");
+            }
+
+            setCountdown("");
+            showToast("✅ Test payment verified. Policy activated!", "success");
+          } catch (err) {
+            console.error("Payment verification failed", err);
+
+            showToast(
+              err.response?.data?.detail ||
+                "Payment verification failed. Check your policy status before retrying.",
+              "error"
+            );
+          } finally {
+            paymentInProgress.current = false;
+            setPaymentLoading(false);
+          }
+        },
+      };
+
+      const checkout = new window.Razorpay(options);
+
+      checkout.on("payment.failed", (response) => {
+        console.error("Razorpay payment failed", response.error);
+
+        paymentInProgress.current = false;
+        setPaymentLoading(false);
+
+        showToast(
+          response.error?.description || "Payment failed. Please try again.",
+          "error"
+        );
+      });
+
+      checkout.open();
+    } catch (err) {
+      console.error("Checkout initialization failed", err);
+
+      paymentInProgress.current = false;
+      setPaymentLoading(false);
+
+      if (err.response?.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+
+      showToast(
+        err.response?.data?.detail ||
+          err.message ||
+          "Could not start checkout. Please try again.",
+        "error"
+      );
     }
   }
 
-  const usingGps = locationSource === "gps";
-
   const payoutTriggers = [
-    { key: "rain", icon: "🌧️", label: "Heavy rain", value: rainMm, limit: 7.5, unit: "mm/h", digits: 1 },
-    { key: "heat", icon: "🔥", label: "Extreme heat", value: temp, limit: 45, unit: "°C", digits: 1 },
-    { key: "pollution", icon: "🌫️", label: "High pollution", value: aqi, limit: 250, unit: "AQI", digits: 0 }
+    {
+      key: "rain",
+      icon: "🌧️",
+      label: "Heavy rain",
+      value: rainMm,
+      limit: 7.5,
+      unit: "mm/h",
+      digits: 1,
+    },
+    {
+      key: "heat",
+      icon: "🔥",
+      label: "Extreme heat",
+      value: temp,
+      limit: 45,
+      unit: "°C",
+      digits: 1,
+    },
+    {
+      key: "pollution",
+      icon: "🌫️",
+      label: "High pollution",
+      value: aqi,
+      limit: 250,
+      unit: "AQI",
+      digits: 0,
+    },
   ];
 
   function triggerColor(ratio) {
@@ -319,11 +500,18 @@ function Policy() {
               animate={{ y: 20, opacity: 1 }}
               exit={{ y: -80, opacity: 0 }}
               style={{
-                position: "fixed", top: 0, left: "50%",
+                position: "fixed",
+                top: 0,
+                left: "50%",
                 transform: "translateX(-50%)",
-                background: toast.type === "success" ? "#22c55e" : "#ef4444",
-                color: "white", padding: "12px 20px", borderRadius: "10px",
-                zIndex: 9999, fontWeight: "bold"
+                background:
+                  toast.type === "success" ? "#22c55e" : "#ef4444",
+                color: "white",
+                padding: "12px 20px",
+                borderRadius: "10px",
+                zIndex: 9999,
+                fontWeight: "bold",
+                maxWidth: "90vw",
               }}
             >
               {toast.message}
@@ -336,19 +524,26 @@ function Policy() {
         </h1>
 
         {isLocked && (
-          <div style={{
-            textAlign: "center", marginBottom: "20px", padding: "12px",
-            background: "white", borderRadius: "10px", fontWeight: "bold"
-          }}>
-            🔒 {plan ? `${plan} plan active. ` : ""}{lockMessage}
+          <div
+            style={{
+              textAlign: "center",
+              marginBottom: "20px",
+              padding: "12px",
+              background: "white",
+              borderRadius: "10px",
+              fontWeight: "bold",
+            }}
+          >
+            🔒 {plan ? `${plan} plan active. ` : ""}
+            {lockMessage}
             <br />
-            ⏳ Unlocks in: {countdown}
+            ⏳ Unlocks in: {countdown || "Calculating..."}
           </div>
         )}
 
-        {/* PLANS */}
+        {/* PLAN CARDS */}
         <div className="pricing-grid">
-          {plans.map(p => {
+          {plans.map((p) => {
             const active = selectedPlan?.name === p.name;
             const isRecommended = !isLocked && recommendedPlan === p.name;
             const isMine = isLocked && plan === p.name;
@@ -356,30 +551,46 @@ function Policy() {
             return (
               <motion.div
                 key={p.name}
-                className={`price-card ${active ? "active glow" : ""} ${isRecommended ? "highlight" : ""} ${isLocked ? "glow-locked" : ""}`}
+                className={`price-card ${active ? "active glow" : ""} ${
+                  isRecommended ? "highlight" : ""
+                } ${isLocked ? "glow-locked" : ""}`}
                 style={isLocked && !isMine ? { opacity: 0.5 } : undefined}
                 whileHover={{ scale: isLocked ? 1 : 1.05 }}
                 onClick={() => {
-                  if (!isLocked) {
-                    setSelectedPlan(p);
-                  }
+                  if (!isLocked && !paymentLoading) setSelectedPlan(p);
                 }}
               >
                 {isRecommended && <div className="badge">Recommended</div>}
 
                 <h2>{p.name}</h2>
-                <h1>₹{p.price}<span>/week</span></h1>
+                <h1>
+                  ₹{p.price}
+                  <span>/week</span>
+                </h1>
 
                 <p className="muted">{p.desc}</p>
 
                 <ul>
-                  {p.features.map(f => <li key={f}>✔ {f}</li>)}
+                  {p.features.map((feature) => (
+                    <li key={feature}>✔ {feature}</li>
+                  ))}
                 </ul>
 
-                <button className="btn" disabled={active || isLocked}>
+                <button
+                  className="btn"
+                  disabled={active || isLocked || paymentLoading}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (!isLocked && !paymentLoading) setSelectedPlan(p);
+                  }}
+                >
                   {isLocked
-                    ? (isMine ? "Your plan 🔒" : "Unavailable")
-                    : active ? "Selected" : "Select Plan"}
+                    ? isMine
+                      ? "Your plan 🔒"
+                      : "Unavailable"
+                    : active
+                    ? "Selected"
+                    : "Select Plan"}
                 </button>
               </motion.div>
             );
@@ -387,129 +598,137 @@ function Policy() {
         </div>
 
         {/* LIVE PAYOUT TRIGGERS */}
-        <div style={{
-          maxWidth: "900px", margin: "28px auto 0", padding: "22px",
-          background: "#fff", border: "1px solid #e5e7eb", borderRadius: "18px",
-          boxShadow: "0 8px 28px rgba(15,23,42,.05)"
-        }}>
-          <h2 style={{ margin: "0 0 6px", fontSize: "20px" }}>Live Payout Triggers</h2>
-          <p style={{ color: "#64748b", fontSize: "13px", margin: "0 0 20px" }}>
-            Current conditions for {city || "your saved city"}. A trigger is reached only when the current value exceeds its policy threshold.
+        <div
+          style={{
+            maxWidth: "900px",
+            margin: "28px auto 0",
+            padding: "22px",
+            background: "#fff",
+            border: "1px solid #e5e7eb",
+            borderRadius: "18px",
+            boxShadow: "0 8px 28px rgba(15,23,42,.05)",
+          }}
+        >
+          <h2 style={{ margin: "0 0 6px", fontSize: "20px" }}>
+            Live Payout Triggers
+          </h2>
+
+          <p
+            style={{
+              color: "#64748b",
+              fontSize: "13px",
+              margin: "0 0 20px",
+            }}
+          >
+            Current conditions for {city || "your saved city"}. A trigger is
+            reached only when the current value exceeds its policy threshold.
           </p>
-          {payoutTriggers.map(item => {
+
+          {payoutTriggers.map((item) => {
             const ratio = item.limit ? item.value / item.limit : 0;
             const hit = item.value > item.limit;
+
             return (
               <div key={item.key} style={{ marginBottom: "18px" }}>
-                <div style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  gap: "12px", flexWrap: "wrap", marginBottom: "8px", fontSize: "14px"
-                }}>
-                  <span>{item.icon} <b>{item.label}</b></span>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                    marginBottom: "8px",
+                    fontSize: "14px",
+                  }}
+                >
                   <span>
-                    <b>{Number(item.value).toFixed(item.digits)}</b> / {item.limit} {item.unit}
-                    <span style={{
-                      marginLeft: "9px", fontSize: "11px", fontWeight: 800,
-                      color: hit ? "#b91c1c" : "#166534",
-                      background: hit ? "#fee2e2" : "#dcfce7",
-                      borderRadius: "999px", padding: "3px 8px"
-                    }}>{hit ? "TRIGGERED" : "NOT TRIGGERED"}</span>
+                    {item.icon} <b>{item.label}</b>
+                  </span>
+
+                  <span>
+                    <b>{Number(item.value).toFixed(item.digits)}</b> /{" "}
+                    {item.limit} {item.unit}
+                    <span
+                      style={{
+                        marginLeft: "9px",
+                        fontSize: "11px",
+                        fontWeight: 800,
+                        color: hit ? "#b91c1c" : "#166534",
+                        background: hit ? "#fee2e2" : "#dcfce7",
+                        borderRadius: "999px",
+                        padding: "3px 8px",
+                      }}
+                    >
+                      {hit ? "TRIGGERED" : "NOT TRIGGERED"}
+                    </span>
                   </span>
                 </div>
-                <div style={{
-                  width: "100%", height: "8px", background: "#e5e7eb",
-                  borderRadius: "999px", overflow: "hidden"
-                }}>
-                  <div style={{
-                    width: `${Math.min(100, ratio * 100)}%`, height: "100%",
-                    borderRadius: "999px", background: triggerColor(ratio),
-                    transition: "width .5s ease"
-                  }} />
+
+                <div
+                  style={{
+                    width: "100%",
+                    height: "8px",
+                    background: "#e5e7eb",
+                    borderRadius: "999px",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${Math.min(100, ratio * 100)}%`,
+                      height: "100%",
+                      borderRadius: "999px",
+                      background: triggerColor(ratio),
+                      transition: "width .5s ease",
+                    }}
+                  />
                 </div>
               </div>
             );
           })}
-          <p style={{ margin: "8px 0 0", fontSize: "13px", color: "#64748b" }}>
-            Overall risk: <b style={{ color: RISK_COLOR[risk] || "#64748b" }}>{risk || "UNKNOWN"}</b>
+
+          <p
+            style={{
+              margin: "8px 0 0",
+              fontSize: "13px",
+              color: "#64748b",
+            }}
+          >
+            Overall risk:{" "}
+            <b style={{ color: RISK_COLOR[risk] || "#64748b" }}>
+              {risk || "UNKNOWN"}
+            </b>
             {dataFallback ? " · Weather data is estimated, not live." : ""}
           </p>
         </div>
 
-        {/* DEMO PAYMENT */}
+        {/* REAL RAZORPAY TEST CHECKOUT */}
         <div style={{ textAlign: "center", marginTop: "20px" }}>
-          <button className="btn-primary" onClick={() => setPaymentOpen(true)}
-            disabled={isLocked || !selectedPlan}>
-            {isLocked ? "Plan Locked 🔒" : `Pay ₹${selectedPlan?.price ?? 0} with Razorpay Demo`}
+          <button
+            className="btn-primary"
+            onClick={handleConfirm}
+            disabled={isLocked || !selectedPlan || paymentLoading}
+          >
+            {isLocked
+              ? "Plan Locked 🔒"
+              : paymentLoading
+              ? "Opening secure checkout..."
+              : `Pay ₹${selectedPlan?.price ?? 0}/week with Razorpay`}
           </button>
-          {!isLocked && <p style={{ color: "#64748b", fontSize: "12px", marginTop: "8px" }}>
-            Demo checkout only — this QR is not a real payment request.
-          </p>}
+
+          {!isLocked && (
+            <p
+              style={{
+                color: "#64748b",
+                fontSize: "12px",
+                marginTop: "8px",
+              }}
+            >
+              Razorpay Test Mode only. Test payments do not collect real money.
+              The final amount is confirmed by the server.
+            </p>
+          )}
         </div>
-
-        {paymentOpen && selectedPlan && (
-          <div role="dialog" aria-modal="true" aria-label="Razorpay demo checkout"
-            style={{
-              position: "fixed", inset: 0, zIndex: 10000, background: "rgba(15,23,42,.65)",
-              display: "grid", placeItems: "center", padding: "18px"
-            }}>
-            <div style={{
-              position: "relative", width: "100%", maxWidth: "420px", background: "#fff",
-              borderRadius: "20px", padding: "26px", textAlign: "center",
-              boxShadow: "0 20px 70px rgba(0,0,0,.25)"
-            }}>
-              <button onClick={() => setPaymentOpen(false)} aria-label="Close payment dialog"
-                style={{
-                  position: "absolute", top: "12px", right: "14px", border: 0,
-                  background: "transparent", fontSize: "24px", cursor: "pointer", color: "#64748b"
-                }}>×</button>
-              <h2 style={{ margin: "0 0 6px" }}>Razorpay Demo Checkout</h2>
-              <p style={{ color: "#64748b", margin: "0 0 18px" }}>
-                {selectedPlan.name} protection · billed weekly
-              </p>
-              <div style={{ fontSize: "34px", fontWeight: 800, marginBottom: "18px" }}>
-                ₹{selectedPlan.price}<span style={{ fontSize: "13px", color: "#64748b" }}>/week</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "center", gap: "10px", marginBottom: "18px" }}>
-                <button onClick={() => setPaymentMethod("qr")} style={{
-                  padding: "9px 14px", borderRadius: "9px", cursor: "pointer",
-                  border: `1px solid ${paymentMethod === "qr" ? "#4f46e5" : "#d1d5db"}`,
-                  background: paymentMethod === "qr" ? "#eef2ff" : "#fff"
-                }}>Scan demo QR</button>
-                <button onClick={() => setPaymentMethod("checkout")} style={{
-                  padding: "9px 14px", borderRadius: "9px", cursor: "pointer",
-                  border: `1px solid ${paymentMethod === "checkout" ? "#4f46e5" : "#d1d5db"}`,
-                  background: paymentMethod === "checkout" ? "#eef2ff" : "#fff"
-                }}>Test checkout</button>
-              </div>
-              {paymentMethod === "qr" ? (
-                <>
-                  <img alt="Demo-only QR code, not a payable Razorpay QR" width="190" height="190"
-                    style={{ display: "block", margin: "0 auto 12px", imageRendering: "pixelated" }}
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=190x190&data=${encodeURIComponent(
-                      `ZENSUREX DEMO ONLY | ${selectedPlan.name} | INR ${selectedPlan.price} per week | NOT A REAL PAYMENT`
-                    )}`} />
-                  <p style={{ color: "#b45309", fontSize: "12px", lineHeight: 1.5 }}>
-                    This QR only identifies the demo plan. It cannot collect money and is not a Razorpay-issued UPI QR.
-                  </p>
-                </>
-              ) : (
-                <div style={{
-                  padding: "16px", borderRadius: "12px", background: "#f8fafc",
-                  color: "#475569", fontSize: "13px", lineHeight: 1.6, marginBottom: "14px"
-                }}>
-                  Real Razorpay test checkout requires a backend-created order and server-side payment verification.
-                  Those endpoints are not configured by this frontend demo.
-                </div>
-              )}
-              <button className="btn" style={{ width: "100%", marginTop: "8px" }}
-                onClick={() => {
-                  setPaymentOpen(false);
-                  showToast("Demo checkout closed. No payment was taken.", "error");
-                }}>Close demo checkout</button>
-            </div>
-          </div>
-        )}
-
       </div>
     </section>
   );
