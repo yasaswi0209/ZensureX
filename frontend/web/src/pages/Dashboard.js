@@ -26,6 +26,44 @@ const chartData = [
   { period: "Week 4", risk: 40 }
 ];
 
+const RISK_COLOR = { LOW: "green", MEDIUM: "orange", HIGH: "red" };
+
+// Same thresholds as the backend and Policy page (rain in mm/h)
+function liveLevel(temp, rainMm, aqi) {
+  let level = "LOW";
+  if (rainMm > 2.5 || temp > 35 || aqi > 150) level = "MEDIUM";
+  if (
+    rainMm > 7.5 ||
+    temp > 40 ||
+    aqi > 200 ||
+    (rainMm > 2.5 && (temp > 35 || aqi > 150))
+  ) {
+    level = "HIGH";
+  }
+  return level;
+}
+
+// Same price formula as the Policy page
+function getPlanPrices(mlPrice) {
+  const base = mlPrice > 0 ? mlPrice : 20;
+  const moderate = Math.round(base * 1.25);
+  const premium = Math.max(Math.round(base * 1.5), moderate + 5);
+  return { Basic: base, Moderate: moderate, Premium: premium };
+}
+
+function getRecommendationDetails(risk) {
+  if (risk === "LOW") {
+    return { plan: "Basic", reason: "Low disruption probability detected.", confidence: 82 };
+  }
+  if (risk === "MEDIUM") {
+    return { plan: "Moderate", reason: "Moderate environmental risk detected.", confidence: 88 };
+  }
+  if (risk === "HIGH") {
+    return { plan: "Premium", reason: "High disruption probability detected.", confidence: 95 };
+  }
+  return null;
+}
+
 function Dashboard() {
 
   const { plan, setPlan, premium, setPremium } = useContext(AppContext);
@@ -43,39 +81,23 @@ function Dashboard() {
   const userData = JSON.parse(localStorage.getItem("user"));
   const userName = userData?.name;
 
-  function getRecommendationDetails(risk) {
-
-    if (risk === "LOW") {
-      return {
-        plan: "Basic",
-        reason: "Low disruption probability detected.",
-        confidence: 82
-      };
-    }
-
-    if (risk === "MEDIUM") {
-      return {
-        plan: "Moderate",
-        reason: "Moderate environmental risk detected.",
-        confidence: 88
-      };
-    }
-
-    if (risk === "HIGH") {
-      return {
-        plan: "Premium",
-        reason: "High disruption probability detected.",
-        confidence: 95
-      };
-    }
-
-    return null;
-  }
+  // Values from the backend
+  const temp = data?.weather?.temp ?? 0;
+  const humidity = data?.weather?.humidity;
+  const rainMm = data?.weather?.rain_mm ?? 0;
+  const aqi = data?.aqi ?? 0;
+  const usingGps = data?.location_source === "gps";
+  const shownCity = data?.city || city || "Your area";
 
   const recommendation = getRecommendationDetails(data?.risk);
+  const prices = getPlanPrices(data?.ml_price);
 
-  // Reason text from the backend, split into separate lines
-  const reasonLines = data?.reason ? data.reason.split(" | ") : [];
+  // Estimate from current conditions (not a true forecast)
+  const futureRisk = data ? liveLevel(temp, rainMm, aqi) : "";
+
+  const reasonLines = data?.reason ? data.reason.split("|") : [];
+  const mlOnly =
+    data?.risk && data.risk !== "LOW" && liveLevel(temp, rainMm, aqi) === "LOW";
 
   async function getCityCoordinates(cityName) {
     try {
@@ -99,13 +121,34 @@ function Dashboard() {
   // RISK: GPS first, saved city as fallback
   useEffect(() => {
     const token = localStorage.getItem("token");
+
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
     const headers = { Authorization: `Bearer ${token}` };
 
-    const byCity = () =>
-      axios
-        .get(`${API_BASE}/risk/?city=${encodeURIComponent(city || "")}`, { headers })
-        .then(r => setData(r.data))
-        .catch(err => console.error(err));
+    async function load(params) {
+      try {
+        const res = await axios.get(`${API_BASE}/risk/`, { headers, params });
+        setData(res.data);
+      } catch (err) {
+        if (err.response?.status === 401) {
+          localStorage.removeItem("token");
+          navigate("/login");
+          return;
+        }
+        // GPS request failed: retry once with the saved city
+        if (params && params.lat !== undefined) {
+          load(city ? { city } : {});
+          return;
+        }
+        console.error(err);
+      }
+    }
+
+    const byCity = () => load(city ? { city } : {});
 
     if (!navigator.geolocation) {
       byCity();
@@ -117,28 +160,29 @@ function Dashboard() {
         const { latitude, longitude } = pos.coords;
         gpsUsed.current = true;
         setPosition([latitude, longitude]);
-        axios
-          .get(`${API_BASE}/risk/?lat=${latitude}&lon=${longitude}`, { headers })
-          .then(r => setData(r.data))
-          .catch(byCity);
+        load({ lat: latitude, lon: longitude });
       },
-      () => byCity(), // permission denied or failed
+      () => byCity(), // permission denied or timed out
       { timeout: 8000 }
     );
-  }, [city]);
+  }, [city, navigate]);
 
   // MAP: use the saved city only when GPS was not used
   useEffect(() => {
+    const target = city || data?.city;
+
     async function updateLocation() {
-      if (city) {
-        const coords = await getCityCoordinates(city);
+      if (target) {
+        const coords = await getCityCoordinates(target);
         if (!gpsUsed.current) setPosition(coords);
       }
     }
     updateLocation();
-  }, [city]);
+  }, [city, data?.city]);
 
   async function upgradePlan(selectedPlan) {
+
+    if (!selectedPlan) return;
 
     try {
 
@@ -162,8 +206,14 @@ function Dashboard() {
 
     } catch (err) {
       console.error(err);
+
+      if (err.response?.status === 400) {
+        setMessage(err.response.data.detail);
+      }
     }
   }
+
+  const circleColor = RISK_COLOR[data?.risk] || "green";
 
   return (
 
@@ -182,9 +232,20 @@ function Dashboard() {
             </h2>
 
             <p className="muted">
-              📍 {city} • Coverage & earnings overview
-              {data?.location_source === "gps" ? " • Using your live location" : ""}
+              📍 {usingGps ? "Live location" : shownCity}
+              {usingGps && data?.city ? ` (profile city: ${data.city})` : ""}
+              {" "}• Coverage & earnings overview
             </p>
+
+            {data && (
+              <p className="muted">
+                🌡 {Number(temp).toFixed(1)}°C
+                {humidity !== undefined ? ` • 💧 ${humidity}%` : ""}
+                {" "}• 🌧 {Number(rainMm).toFixed(1)} mm/h • 🌫 AQI {aqi}
+              </p>
+            )}
+
+            {message && <p className="muted">{message}</p>}
 
           </div>
 
@@ -209,7 +270,7 @@ function Dashboard() {
             <div>
               <p className="status-label">Location</p>
               <p className="status-value">
-                {data?.location_source === "gps" ? "Live GPS" : "Saved city"}
+                {data ? (usingGps ? "Live GPS" : "Saved city") : "Loading"}
               </p>
             </div>
           </motion.div>
@@ -217,8 +278,10 @@ function Dashboard() {
           <motion.div className="status-card glass">
             <div className="status-icon protection">🛡</div>
             <div>
-              <p className="status-label">Protection</p>
-              <p className="status-value">Running</p>
+              <p className="status-label">Next 6h Risk (estimate)</p>
+              <p className={`status-value ${futureRisk.toLowerCase()}`}>
+                {futureRisk || "Loading"}
+              </p>
             </div>
           </motion.div>
 
@@ -253,29 +316,17 @@ function Dashboard() {
 
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
-                {/* 📍 USER LOCATION */}
                 <Marker position={position}>
                   <Popup>You are here</Popup>
                 </Marker>
 
-                {/* 🔥 AI RISK ZONE */}
                 {data?.risk && (
                   <Circle
                     center={position}
                     radius={800}
                     pathOptions={{
-                      color:
-                        data.risk === "HIGH"
-                          ? "red"
-                          : data.risk === "MEDIUM"
-                          ? "orange"
-                          : "green",
-                      fillColor:
-                        data.risk === "HIGH"
-                          ? "red"
-                          : data.risk === "MEDIUM"
-                          ? "orange"
-                          : "green",
+                      color: circleColor,
+                      fillColor: circleColor,
                       fillOpacity: 0.4
                     }}
                   />
@@ -363,6 +414,9 @@ function Dashboard() {
               <motion.div className="dash-stat-card glass premium-card">
                 <p className="dsc-label">💰 Weekly Premium</p>
                 <h3 className="card-value">₹{premium || 0}</h3>
+                {data?.ml_price ? (
+                  <p className="muted">AI price today: ₹{data.ml_price}</p>
+                ) : null}
               </motion.div>
 
               <motion.div className="dash-stat-card glass">
@@ -393,27 +447,28 @@ function Dashboard() {
                       style={{ cursor: "pointer", color: "#6366f1" }}
                       onClick={() => upgradePlan(recommendation.plan)}
                     >
-                      {recommendation.plan} (Click to upgrade 🚀)
+                      {recommendation.plan} • ₹{prices[recommendation.plan]}/week
+                      {" "}(Click to upgrade 🚀)
                     </span>
                   </p>
-
-                  {data?.weather && (
-                    <p className="muted">
-                      🌡 {data.weather.temp}°C • 💧 {data.weather.humidity}% •
-                      🌧 {data.weather.rain_mm ?? 0} mm/h • 🌫 AQI {data.aqi}
-                    </p>
-                  )}
 
                   <p><b>Reason:</b></p>
 
                   {reasonLines.length > 0 ? (
                     <ul style={{ margin: "4px 0 8px 18px" }}>
                       {reasonLines.map((line, i) => (
-                        <li key={i}>{line}</li>
+                        <li key={i}>{line.trim()}</li>
                       ))}
                     </ul>
                   ) : (
                     <p>{recommendation.reason}</p>
+                  )}
+
+                  {mlOnly && (
+                    <p className="muted">
+                      Current conditions are normal. The {data.risk} level comes
+                      from this area's historical risk pattern.
+                    </p>
                   )}
 
                   {data?.data_fallback && (
