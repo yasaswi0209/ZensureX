@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
@@ -10,8 +11,14 @@ OWM_WEATHER_URL = "https://api.openweathermap.org/data/2.5/weather"
 OWM_FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 WAQI_URL = "https://api.waqi.info/feed"
 
+OM_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+OM_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+
 RAIN_CONDITIONS = ("Rain", "Drizzle", "Thunderstorm")
 TIMEOUT = 8
+
+# city name -> (lat, lon), so we only look each city up once
+_GEO_CACHE = {}
 
 
 def _fallback():
@@ -143,6 +150,136 @@ def get_weather_forecast(city: str):
         return _fallback()
 
 
+# ---- Open-Meteo hourly forecast (main source) ------------------------------
+
+def _wmo_to_owm(code):
+    """Open-Meteo (WMO) weather code -> OpenWeather-style (id, name)."""
+    code = int(code or 0)
+    if code in (95, 96, 99):
+        return 211, "Thunderstorm"
+    if code == 82:
+        return 522, "Rain"            # violent showers
+    if code == 65:
+        return 502, "Rain"            # heavy rain
+    if code == 81:
+        return 521, "Rain"            # moderate showers
+    if code == 63:
+        return 501, "Rain"            # moderate rain
+    if code in (66, 67):
+        return 511, "Rain"            # freezing rain
+    if code == 80:
+        return 520, "Rain"            # light showers
+    if code == 61:
+        return 500, "Rain"            # light rain
+    if code in (51, 53, 55, 56, 57):
+        return 300, "Drizzle"
+    if code in (71, 73, 75, 77, 85, 86):
+        return 601, "Snow"
+    if code in (45, 48):
+        return 741, "Fog"
+    if code == 1:
+        return 801, "Clouds"
+    if code == 2:
+        return 802, "Clouds"
+    if code == 3:
+        return 804, "Clouds"
+    return 800, "Clear"
+
+
+def _worst_slot(slots):
+    """Pick the hour that matters most: thunderstorm, then most rain, then highest chance."""
+    if not slots:
+        return None
+    return max(
+        slots,
+        key=lambda s: (200 <= s["condition_id"] <= 232, s["rain_mm"], s["pop"]),
+    )
+
+
+def _open_meteo_forecast(lat: float, lon: float):
+    """
+    Hourly forecast from Open-Meteo.
+      h3 = worst hour from now to +3h
+      h6 = worst hour from +4h to +6h
+    Returns None if anything goes wrong, so the caller can fall back to OpenWeather.
+    """
+    try:
+        res = requests.get(
+            OM_FORECAST_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": "temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,weather_code",
+                "forecast_days": 2,
+                "timezone": "auto",
+            },
+            timeout=TIMEOUT,
+        ).json()
+
+        h = res["hourly"]
+        times = h["time"]
+        offset = res.get("utc_offset_seconds", 0) or 0
+    except Exception as e:
+        print("Open-Meteo forecast error:", e)
+        return None
+
+    # current hour in the location's own time zone, same format as the API times
+    local_now = datetime.now(timezone.utc) + timedelta(seconds=offset)
+    now_key = local_now.strftime("%Y-%m-%dT%H:00")
+    start = next((i for i, t in enumerate(times) if t >= now_key), 0)
+
+    def build(i):
+        cid, cname = _wmo_to_owm(h["weather_code"][i])
+        mm = float(h["precipitation"][i] or 0)
+        return {
+            "temp": h["temperature_2m"][i],
+            "humidity": h["relative_humidity_2m"][i],
+            "rain": 1 if (mm > 0 or cname in RAIN_CONDITIONS) else 0,
+            "rain_mm": round(mm, 2),
+            "pop": int(h["precipitation_probability"][i] or 0),   # rain chance in %
+            "dt": times[i],
+            "condition": cname,
+            "condition_id": cid,
+        }
+
+    try:
+        first = [build(i) for i in range(start, min(start + 4, len(times)))]
+        second = [build(i) for i in range(start + 4, min(start + 7, len(times)))]
+    except Exception as e:
+        print("Open-Meteo parse error:", e)
+        return None
+
+    h3 = _worst_slot(first)
+    h6 = _worst_slot(second)
+    if not h3 or not h6:
+        return None
+    return {"h3": h3, "h6": h6}
+
+
+def _geocode_city(city: str):
+    """City name -> (lat, lon) using Open-Meteo geocoding. Cached."""
+    key = (city or "").strip().lower()
+    if not key:
+        return None
+    if key in _GEO_CACHE:
+        return _GEO_CACHE[key]
+    try:
+        res = requests.get(
+            OM_GEOCODE_URL,
+            params={"name": city, "count": 1, "country_code": "IN"},
+            timeout=TIMEOUT,
+        ).json()
+        hit = (res.get("results") or [None])[0]
+        if hit:
+            _GEO_CACHE[key] = (hit["latitude"], hit["longitude"])
+            return _GEO_CACHE[key]
+    except Exception as e:
+        print("Geocode error:", e)
+    return None
+
+
+# ---- OpenWeather forecast (fallback) ---------------------------------------
+
 def _parse_forecast(res: dict):
     """
     Turn an OpenWeather 5-day/3-hour forecast into two slots:
@@ -178,8 +315,7 @@ def _parse_forecast(res: dict):
     return {"h3": slots[0], "h6": slots[1]}
 
 
-def get_forecast_by_coords(lat: float, lon: float):
-    """Next 3h and 6h forecast by GPS coordinates."""
+def _owm_forecast_by_coords(lat: float, lon: float):
     try:
         res = requests.get(
             OWM_FORECAST_URL,
@@ -192,8 +328,7 @@ def get_forecast_by_coords(lat: float, lon: float):
         return None
 
 
-def get_forecast_by_city(city: str):
-    """Next 3h and 6h forecast by city name."""
+def _owm_forecast_by_city(city: str):
     try:
         res = requests.get(
             OWM_FORECAST_URL,
@@ -204,3 +339,20 @@ def get_forecast_by_city(city: str):
     except Exception as e:
         print("Forecast API (city) error:", e)
         return None
+
+
+# ---- public functions (same names as before) --------------------------------
+
+def get_forecast_by_coords(lat: float, lon: float):
+    """Next 3h and 6h forecast by GPS coordinates. Open-Meteo first, OpenWeather as backup."""
+    return _open_meteo_forecast(lat, lon) or _owm_forecast_by_coords(lat, lon)
+
+
+def get_forecast_by_city(city: str):
+    """Next 3h and 6h forecast by city name. Open-Meteo first, OpenWeather as backup."""
+    coords = _geocode_city(city)
+    if coords:
+        data = _open_meteo_forecast(coords[0], coords[1])
+        if data:
+            return data
+    return _owm_forecast_by_city(city)
