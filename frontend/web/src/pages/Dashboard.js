@@ -762,11 +762,15 @@ function TriggerCard({ temp, rainMm, aqi, covered, ready }) {
               <div className="zx-bar" style={{ margin: "6px 0 4px" }}>
                 <div
                   className="zx-bar-fill"
-                  style={{ width: `${Math.min((v / t.limit) * 100, 100)}%`, background: s.color }}
+                  style={{ width: `${Math.min((v / limit) * 100, 100)}%`, background: s.color }}
                 />
               </div>
               <p className="zx-muted" style={{ fontSize: 12, margin: 0 }}>
-                Now {Number(v).toFixed(t.key === "rain" ? 1 : 0)}{t.unit} · pays out at {t.limit}{t.unit}
+                Now {Number(v).toFixed(t.key === "rain" ? 1 : 0)}{t.unit} ·{" "}
+                {hit ? `pays ₹${hit[1]}` : `pays from ${limit}${t.unit}`}
+              </p>
+              <p className="zx-muted" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                {t.tiers.map(([at, amt]) => `${at}${t.unit} = ₹${amt}`).join("  ·  ")}
               </p>
               {simulate && (
                 <input
