@@ -219,11 +219,11 @@ function tempIcon(t, isNight) {
 /* ------------------------------------------------------------------ */
 
 // Which animation to play. Rain and storm win, then snow, then temperature.
-//   storm  : very dark clouds (lightning is added separately)
-//   rain   : dark clouds (rain drops come from RainCanvas)
+//   storm  : dark soft clouds, sky band, fog, vignette (lightning is added separately)
+//   rain   : soft clouds, sky band, fog (rain drops come from RainCanvas)
 //   snow   : falling snow, heavy   (snow weather code, or 5°C and below)
 //   cold   : light snow and mist   (below 15°C)
-//   cloudy : drifting clouds       (15 to 24°C)
+//   cloudy : drifting soft clouds  (15 to 24°C)
 //   warm   : sun glow, few clouds  (25 to 34°C)
 //   sunny  : strong sun and rays   (35 to 37°C)
 //   scorch : red sun, heat waves, rising embers (38°C and above)
@@ -237,19 +237,22 @@ function pickFx({ raining, isStorm, isSnow, temp }) {
   return "cloudy";
 }
 
+// n: number of clouds, color: cloud color, op: base opacity, band: top sky gradient strength (0 = none)
 const CLOUD_CFG = {
-  cloudy: { n: 6, color: "#cbd5e1", op: 0.65 },
-  warm: { n: 3, color: "#e8eef7", op: 0.8 },
-  sunny: { n: 1, color: "#e8eef7", op: 0.6 },
-  scorch: { n: 0, color: "#e8eef7", op: 0 },
-  cold: { n: 4, color: "#b6c4d8", op: 0.65 },
-  snow: { n: 6, color: "#94a3b8", op: 0.7 },
-  rain: { n: 6, color: "#64748b", op: 0.6 },
-  storm: { n: 8, color: "#334155", op: 0.75 }
+  cloudy: { n: 4, color: "#cbd5e1", op: 0.55, band: 0.10 },
+  warm: { n: 2, color: "#e8eef7", op: 0.6, band: 0 },
+  sunny: { n: 1, color: "#e8eef7", op: 0.45, band: 0 },
+  scorch: { n: 0, color: "#e8eef7", op: 0, band: 0 },
+  cold: { n: 3, color: "#b6c4d8", op: 0.55, band: 0.10 },
+  snow: { n: 4, color: "#94a3b8", op: 0.55, band: 0.14 },
+  rain: { n: 4, color: "#64748b", op: 0.5, band: 0.22 },
+  storm: { n: 5, color: "#334155", op: 0.6, band: 0.34 }
 };
 
 const SKY_MODES = ["cloudy", "warm", "sunny", "scorch", "cold"]; // modes that show moon and stars at night
 const SUN_MODES = ["warm", "sunny", "scorch"];                   // modes that show the sun in the day
+const FOG_MODES = ["rain", "storm"];                             // modes with rolling fog
+const BAND_MODES = ["cloudy", "cold", "snow", "rain", "storm"];  // modes with the soft top sky band
 
 function mulberry32(a) {
   return function () {
@@ -269,12 +272,13 @@ function WeatherFX({ mode, night }) {
     const seed = [...mode].reduce((a, c) => a * 31 + c.charCodeAt(0), 7);
     const r = mulberry32(seed);
 
+    // soft clouds: kept near the top, slow and blurred
     const clouds = Array.from({ length: cfg.n }, () => ({
-      top: 2 + r() * 30,
-      size: 150 + r() * 190,
-      dur: 70 + r() * 80,
-      delay: -r() * 150,
-      op: cfg.op * (0.7 + r() * 0.3)
+      top: r() * 20,
+      size: 240 + r() * 260,
+      dur: 110 + r() * 90,
+      delay: -r() * 200,
+      op: cfg.op * (0.55 + r() * 0.35)
     }));
 
     const flakeCount = mode === "snow" ? 70 : mode === "cold" ? 26 : 0;
@@ -309,6 +313,8 @@ function WeatherFX({ mode, night }) {
 
   const showSun = !night && SUN_MODES.includes(mode);
   const showSky = night && SKY_MODES.includes(mode);
+  const showBand = BAND_MODES.includes(mode) && cfg.band > 0;
+  const showFog = FOG_MODES.includes(mode);
 
   return (
     <>
@@ -316,13 +322,45 @@ function WeatherFX({ mode, night }) {
         .zxfx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
         .zxfx.night::before { content: ""; position: absolute; inset: 0; background: rgba(15, 23, 42, 0.10); }
 
-        /* clouds */
+        /* soft sky band at the top (rain, storm, snow, cloudy, cold) */
+        .zxfx-band {
+          position: absolute; top: 0; left: 0; right: 0; height: 42vh;
+          background: linear-gradient(to bottom, var(--band-color), transparent);
+          animation: zxfx-breathe 9s ease-in-out infinite;
+        }
+
+        /* soft blurred clouds */
         .zxfx-cloud {
           position: absolute; left: 0;
-          filter: drop-shadow(0 6px 12px rgba(71, 85, 105, 0.25));
+          filter: blur(16px);
+          background:
+            radial-gradient(ellipse 30% 55% at 22% 62%, currentColor 0%, transparent 100%),
+            radial-gradient(ellipse 36% 72% at 48% 42%, currentColor 0%, transparent 100%),
+            radial-gradient(ellipse 30% 55% at 76% 60%, currentColor 0%, transparent 100%),
+            radial-gradient(ellipse 62% 36% at 50% 78%, currentColor 0%, transparent 100%);
           animation: zxfx-drift linear infinite; will-change: transform;
         }
-        .zxfx.night .zxfx-cloud { filter: brightness(0.5) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.3)); }
+        .zxfx.night .zxfx-cloud { filter: blur(16px) brightness(0.5); }
+
+        /* rolling fog (rain and storm) */
+        .zxfx-fog {
+          position: absolute; left: -20%; right: -20%; bottom: 0; height: 30vh;
+          background:
+            radial-gradient(ellipse at 20% 100%, rgba(148, 163, 184, 0.40), transparent 62%),
+            radial-gradient(ellipse at 70% 100%, rgba(100, 116, 139, 0.34), transparent 62%);
+          filter: blur(10px);
+          animation: zxfx-fog 22s ease-in-out infinite alternate;
+        }
+        .zxfx-fog.two {
+          height: 20vh; opacity: 0.8;
+          animation-duration: 30s; animation-direction: alternate-reverse;
+        }
+
+        /* dark edge vignette during rain and storm */
+        .zxfx-vignette {
+          position: absolute; inset: 0;
+          background: radial-gradient(ellipse at 50% 40%, transparent 45%, var(--vig) 100%);
+        }
 
         /* snow */
         .zxfx-flake {
@@ -391,7 +429,9 @@ function WeatherFX({ mode, night }) {
           animation: zxfx-twinkle ease-in-out infinite;
         }
 
-        @keyframes zxfx-drift   { from { transform: translateX(-45vw); } to { transform: translateX(115vw); } }
+        @keyframes zxfx-drift   { from { transform: translateX(-50vw); } to { transform: translateX(115vw); } }
+        @keyframes zxfx-breathe { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+        @keyframes zxfx-fog     { from { transform: translateX(-8%); } to { transform: translateX(8%); } }
         @keyframes zxfx-fall    { from { transform: translate3d(0, -8vh, 0); } to { transform: translate3d(var(--dx), 108vh, 0); } }
         @keyframes zxfx-rise    { 0% { transform: translate3d(0, 0, 0); opacity: 0; } 15% { opacity: 0.85; } 100% { transform: translate3d(var(--dx), -70vh, 0); opacity: 0; } }
         @keyframes zxfx-twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
@@ -429,29 +469,40 @@ function WeatherFX({ mode, night }) {
 
         {mode === "scorch" && <div className="zxfx-heat" />}
 
+        {/* soft sky band */}
+        {showBand && (
+          <div
+            className="zxfx-band"
+            style={{ "--band-color": hexToRgba(cfg.color, cfg.band) }}
+          />
+        )}
+
+        {/* soft blurred clouds */}
         {fx.clouds.map((c, i) => (
-          <svg
+          <div
             key={`c${i}`}
             className="zxfx-cloud"
-            viewBox="0 0 220 110"
-            width={c.size}
-            height={c.size / 2}
             style={{
               top: `${c.top}%`,
+              width: c.size,
+              height: c.size * 0.45,
               color: cfg.color,
               opacity: c.op,
               animationDuration: `${c.dur}s`,
               animationDelay: `${c.delay}s`
             }}
-          >
-            <g fill="currentColor">
-              <circle cx="60" cy="68" r="34" />
-              <circle cx="105" cy="48" r="44" />
-              <circle cx="155" cy="66" r="36" />
-              <rect x="40" y="64" width="150" height="38" rx="19" />
-            </g>
-          </svg>
+          />
         ))}
+
+        {/* rolling fog and vignette for rain / storm */}
+        {showFog && <div className="zxfx-fog" />}
+        {showFog && <div className="zxfx-fog two" />}
+        {showFog && (
+          <div
+            className="zxfx-vignette"
+            style={{ "--vig": mode === "storm" ? "rgba(15, 23, 42, 0.28)" : "rgba(15, 23, 42, 0.14)" }}
+          />
+        )}
 
         {mode === "cold" && <div className="zxfx-mist" />}
 
@@ -488,6 +539,16 @@ function WeatherFX({ mode, night }) {
       </div>
     </>
   );
+}
+
+// "#334155" + 0.3 -> "rgba(51, 65, 85, 0.3)"
+function hexToRgba(hex, alpha) {
+  const h = hex.replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 // Lightning flashes for thunderstorms. Random timing, skipped if the user prefers reduced motion.
