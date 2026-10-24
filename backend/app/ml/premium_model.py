@@ -1,115 +1,68 @@
 import os
 import joblib
-from app.utils.weather_api import get_weather_data, get_aqi_data
+from app.services.risk_engine import assess, get_conditions, BANDS
 
-# ❌ DO NOT load model directly here
+_MODEL = None
+_MODEL_LOADED = False
+
 
 def load_model():
+    """Load the ML model once, not on every request."""
+    global _MODEL, _MODEL_LOADED
+    if _MODEL_LOADED:
+        return _MODEL
     try:
-        BASE_DIR = os.path.dirname(__file__)
-        model_path = os.path.join(BASE_DIR, "premium_model.pkl")
-        return joblib.load(model_path)
+        path = os.path.join(os.path.dirname(__file__), "premium_model.pkl")
+        _MODEL = joblib.load(path)
     except Exception as e:
         print("MODEL LOAD ERROR:", e)
-        return None
+        _MODEL = None
+    _MODEL_LOADED = True
+    return _MODEL
 
-def calculate_premium(city: str):
 
-    # 🔥 load model here (SAFE)
-    model = load_model()
-
-    # 🌦️ Fetch data
-    weather = get_weather_data(city) or {}
-    aqi = get_aqi_data(city) or 100
+def calculate_premium(city: str, weather=None, aqi=None):
+    if weather is None:
+        weather, aqi = get_conditions(city)
+    if aqi is None:
+        aqi = 100
 
     temp = weather.get("temp", 30)
     humidity = weather.get("humidity", 50)
     rain = weather.get("rain", 0)
+    rain_mm = weather.get("rain_mm", 0) or 0
+    cond_id = weather.get("condition_id", 800)
 
-    # 🤖 ML prediction
+    # 1. Risk level from the single shared function
+    result = assess(temp, rain_mm, cond_id, aqi)
+    level = result["level"]
+
+    # 2. ML probability decides the exact spot inside the band
+    model = load_model()
     if model is None:
         risk_score = 0.5
     else:
-        risk_score = float(model.predict([[aqi, temp, rain, humidity]])[0])
+        try:
+            risk_score = float(model.predict([[aqi, temp, rain, humidity]])[0])
+        except Exception as e:
+            print("MODEL PREDICT ERROR:", e)
+            risk_score = 0.5
 
-    # 🔥 Convert to safe probability
-    trigger_prob = max(0.1, min(risk_score, 0.9))
+    prob = max(0.1, min(risk_score, 0.9))
+    position = (prob - 0.1) / 0.8  # 0.0 to 1.0
 
-    # ====================================================
-    # 🔥 SMART RISK SCORING
-    # ====================================================
-    score = 0
-
-    if temp > 40:
-        score += 2
-    elif temp > 35:
-        score += 1
-
-    if rain > 0:
-        score += 2
-
-    if aqi > 200:
-        score += 3
-    elif aqi > 100:
-        score += 2
-
-    if score >= 4:
-        risk_level = "HIGH"
-    elif score >= 2:
-        risk_level = "MEDIUM"
-    else:
-        risk_level = "LOW"
-
-    # ====================================================
-    # 💰 BASE INCOME LOSS
-    # ====================================================
-    if temp > 45:
-        avg_income_loss = 700
-    elif temp > 40:
-        avg_income_loss = 600
-    elif temp > 35:
-        avg_income_loss = 500
-    else:
-        avg_income_loss = 400
-
-    days_exposed = 3 if rain > 0 else 1
-
-    # ====================================================
-    # 🔥 STEP 1: BASE PREMIUM
-    # ====================================================
-    base_premium = (trigger_prob * avg_income_loss * days_exposed) / 10
-
-    # ====================================================
-    # 🔥 STEP 2: NORMALIZE (0–1)
-    # ====================================================
-    normalized = min(max(base_premium / 100, 0), 1)
-
-    # ====================================================
-    # 🎯 RANGE BASED ON RISK
-    # ====================================================
-    if risk_level == "LOW":
-        min_p, max_p = 20, 30
-    elif risk_level == "MEDIUM":
-        min_p, max_p = 30, 42
-    else:
-        min_p, max_p = 42, 52
-
-    # ====================================================
-    # 🔥 STEP 3: MAP INSIDE RANGE
-    # ====================================================
-    final_premium = min_p + (normalized * (max_p - min_p))
-
-    # ====================================================
-    # 🔒 FINAL SAFETY
-    # ====================================================
-    final_premium = max(20, min(final_premium, 52))
+    low, high = BANDS[level]
+    premium = round(low + position * (high - low), 2)
 
     return {
-        "premium": round(final_premium, 2),
+        "premium": premium,
         "aqi": aqi,
         "temp": temp,
         "rain": rain,
         "humidity": humidity,
         "risk_score": risk_score,
-        "risk_level": risk_level
+        "risk_level": level,
+        "risk_points": result["points"],
+        "breakdown": result["factors"],
+        "band": [low, high],
     }
