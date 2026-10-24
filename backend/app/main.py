@@ -6,7 +6,7 @@ from app.db.session import engine
 from app.db.session import engine, Base
 import app.db.base  # noqa: F401  (registers all models)
 from app.db.schema import ensure_schema
-
+from app.api.routes.admin import router as admin_router
 Base.metadata.create_all(bind=engine)
 ensure_schema(engine)
 
