@@ -23,6 +23,9 @@ router = APIRouter()
 DEMO_MODE = False
 DEMO_SCENARIO = "HIGH"   # LOW / MEDIUM / HIGH
 
+# TEST ONLY: fakes a thunderstorm for every user. Set to False after testing.
+TEST_STORM = True
+
 LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 LEVEL_NAMES = ["LOW", "MEDIUM", "HIGH"]
 PLAN_FOR_LEVEL = {"LOW": "Basic", "MEDIUM": "Moderate", "HIGH": "Premium"}
@@ -119,6 +122,13 @@ def get_risk(
             "condition_id": weather.get("condition_id", 800),
         }
         forecast = {"h3": dict(demo_slot), "h6": dict(demo_slot)}
+
+    # TEST ONLY: fake thunderstorm (turn off with TEST_STORM = False)
+    if TEST_STORM:
+        weather["condition_id"] = 211
+        weather["condition"] = "Thunderstorm"
+        weather["description"] = "thunderstorm"
+        weather["rain"] = 1
 
     temp = weather.get("temp", 30)
     rain_mm = weather.get("rain_mm", 0) or 0   # mm per hour
