@@ -50,7 +50,7 @@ from app.api.routes.pool import router as pool_router
 
 app.include_router(insurance_router)
 app.include_router(pool_router)
-
+app.include_router(admin_router)
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 app.include_router(risk_router, prefix="/risk", tags=["Risk"])
 app.include_router(claim_router)
