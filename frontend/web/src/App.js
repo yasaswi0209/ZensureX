@@ -1,12 +1,12 @@
 import {
-BrowserRouter,
-Routes,
-Route,
-Navigate,
-useLocation
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation
 } from "react-router-dom";
 import ForgotPassword from "./pages/ForgotPassword";
-
+import { Analytics } from "@vercel/analytics/react";
 import { AnimatePresence } from "framer-motion";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -26,91 +26,90 @@ import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
 import PaymentSetup from "./pages/PaymentSetup";
 import AssistantPage from "./pages/AssistantPage";
-function AppWrapper(){
 
-const location = useLocation();
+function AppWrapper() {
 
-return(
+  const location = useLocation();
 
-<div className="app">
+  return (
 
-<Navbar/>
+    <div className="app">
 
-<div className="content">
+      <Navbar />
 
-<AnimatePresence mode="wait">
+      <div className="content">
 
-<Routes location={location} key={location.pathname}>
+        <AnimatePresence mode="wait">
 
-<Route path="/" element={<Home/>} />
-<Route path="/forgot-password" element={<ForgotPassword />} />
-<Route path="/login" element={<Login/>} />
-<Route path="/payment-setup" element={<PaymentSetup />} />
-<Route path="/signup" element={<Signup/>} />
-<Route path="/settings" element={<Settings />} />
-<Route path="/profile" element={<Profile/>}/>
-{/* PROTECTED */}
-<Route path="/assistant" element={<AssistantPage />} />
-<Route path="/dashboard" element={
-<ProtectedRoute>
-<Dashboard/>
-</ProtectedRoute>
-} />
-<Route path="/profile" element={
-  <ProtectedRoute>
-    <Profile/>
-  </ProtectedRoute>
-} />
+          <Routes location={location} key={location.pathname}>
 
-<Route path="/policy" element={
-<ProtectedRoute>
-<Policy/>
-</ProtectedRoute>
-} />
+            <Route path="/" element={<Home />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/payment-setup" element={<PaymentSetup />} />
+            <Route path="/signup" element={<Signup />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/assistant" element={<AssistantPage />} />
 
-<Route path="/claims" element={
-<ProtectedRoute>
-<Claims/>
-</ProtectedRoute>
-} />
+            {/* PROTECTED */}
+            <Route path="/dashboard" element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            } />
 
+            <Route path="/profile" element={
+              <ProtectedRoute>
+                <Profile />
+              </ProtectedRoute>
+            } />
 
+            <Route path="/policy" element={
+              <ProtectedRoute>
+                <Policy />
+              </ProtectedRoute>
+            } />
 
-<Route path="/pool" element={
-<ProtectedRoute>
-<PoolDetails/>
-</ProtectedRoute>
-} />
+            <Route path="/claims" element={
+              <ProtectedRoute>
+                <Claims />
+              </ProtectedRoute>
+            } />
 
+            <Route path="/pool" element={
+              <ProtectedRoute>
+                <PoolDetails />
+              </ProtectedRoute>
+            } />
 
-<Route path="*" element={<Navigate to="/"/>} />
+            <Route path="*" element={<Navigate to="/" />} />
 
-</Routes>
-</AnimatePresence>
+          </Routes>
+        </AnimatePresence>
 
-</div>
+      </div>
 
-<Dock/>
+      <Dock />
 
-</div>
+    </div>
 
-)
+  );
 
 }
 
+function App() {
 
-
-function App(){
-
-return(
+  return (
     <BrowserRouter>
-      <AuthProvider>   {/* ✅ FIXED POSITION */}
+      <AuthProvider>
         <AppProvider>
-          <AppWrapper/>
+          <AppWrapper />
         </AppProvider>
       </AuthProvider>
+      <Analytics />
     </BrowserRouter>
-  )
+  );
+
 }
 
 export default App;
