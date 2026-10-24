@@ -152,8 +152,25 @@ def balance(db, zone: str) -> float:
     return _sum(db, zone, ["seed", "premium"]) - _sum(db, zone, ["payout"])
 
 
-def add_premium(db, zone: str, user_id: int, amount: float, plan: str):
+def add_premium(db, zone: str, user_id: int, amount: float, plan: str, ref: str = None):
     _ensure_seed(db, zone)
+
+    note = f"{plan} weekly premium"
+
+    if ref:
+        # same payment can never be credited twice
+        note += f" [{ref}]"
+        already = (
+            db.query(PoolLedger.id)
+            .filter(
+                PoolLedger.zone == zone,
+                PoolLedger.kind == "premium",
+                PoolLedger.note == note,
+            )
+            .first()
+        )
+        if already:
+            return
 
     db.add(
         PoolLedger(
@@ -161,7 +178,7 @@ def add_premium(db, zone: str, user_id: int, amount: float, plan: str):
             user_id=user_id,
             kind="premium",
             amount=amount,
-            note=f"{plan} weekly premium",
+            note=note,
         )
     )
     db.commit()
