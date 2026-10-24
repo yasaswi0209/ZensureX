@@ -172,6 +172,7 @@ function RiskGauge({ risk }) {
     </svg>
   );
 }
+
 async function lookupPlace(lat, lon) {
   try {
     const r = await axios.get(
@@ -202,6 +203,7 @@ async function lookupPlace(lat, lon) {
     return "";
   }
 }
+
 function Dashboard() {
 
   const navigate = useNavigate();
@@ -235,11 +237,19 @@ function Dashboard() {
   const forecast = data?.forecast || null;
   const next6 = forecast?.h6?.risk || "";
 
+  // ---- weather condition from OpenWeather (NEW) ----
+  const condId = data?.weather?.condition_id ?? 800;
+  const condText = data?.weather?.description || data?.weather?.condition || "";
+  const isStorm = condId >= 200 && condId <= 232;          // thunderstorm
+  const apiSaysRain = data?.weather?.rain === 1;           // backend flag: rain, drizzle or storm
+
   // ---- rain effect: real rain, or ?rain=1 / ?rain=2 to preview ----
   const demo = new URLSearchParams(window.location.search).get("rain");
-  const raining = demo === "1" || demo === "2" || rainMm > 0.1;
-  const stormy = demo === "2" || rainMm > 7.5;
-  const rainIntensity = demo ? (demo === "2" ? 1 : 0.6) : Math.min(1, 0.25 + rainMm / 10);
+  const raining = demo === "1" || demo === "2" || rainMm > 0.1 || apiSaysRain;
+  const stormy = demo === "2" || rainMm > 7.5 || isStorm;
+  const rainIntensity = demo
+    ? (demo === "2" ? 1 : 0.6)
+    : Math.min(1, 0.25 + rainMm / 10 + (isStorm ? 0.4 : 0));
 
   let scene = "clear";
   if (raining) scene = "rain";
@@ -248,7 +258,7 @@ function Dashboard() {
 
   const hour = new Date().getHours();
   const sceneIcon = {
-    rain: "🌧",
+    rain: isStorm ? "⛈" : "🌧",
     hot: "🔥",
     smog: "🌫",
     clear: hour >= 19 || hour < 6 ? "🌙" : "☀️"
@@ -277,7 +287,15 @@ function Dashboard() {
   // ---- banner under the hero ----
   let banner = { tone: "", icon: "✅", text: "Conditions are stable. Auto payout is watching your zone." };
   if (data) {
-    if (data.outlook_risk === "HIGH") {
+    if (isStorm) {
+      banner = {
+        tone: "danger",
+        icon: "⛈",
+        text: pool?.plan
+          ? "Thunderstorm in your area. Stay alert. Your plan pays out automatically if conditions trigger it."
+          : "Thunderstorm in your area and you have no active plan. Choose a plan to stay covered."
+      };
+    } else if (data.outlook_risk === "HIGH") {
       banner = {
         tone: "danger",
         icon: "⚠️",
@@ -357,36 +375,36 @@ function Dashboard() {
 
     navigator.geolocation.getCurrentPosition(
       pos => {
-  const { latitude, longitude, accuracy: acc } = pos.coords;
+        const { latitude, longitude, accuracy: acc } = pos.coords;
 
-  gpsUsed.current = true;
+        gpsUsed.current = true;
 
-  setPosition([latitude, longitude]);
-  setAccuracy(acc);
+        setPosition([latitude, longitude]);
+        setAccuracy(acc);
 
-  lookupPlace(latitude, longitude)
-    .then(name => {
-      if (name) setPlace(name);
+        lookupPlace(latitude, longitude)
+          .then(name => {
+            if (name) setPlace(name);
 
-      return axios
-        .post(
-          `${API_BASE}/pool/location`,
-          {
-            lat: latitude,
-            lon: longitude,
-            place: name
-          },
-          { headers }
-        )
-        .catch(() => {});
-    })
-    .finally(() => {
-      load({
-        lat: latitude,
-        lon: longitude
-      });
-    });
-},
+            return axios
+              .post(
+                `${API_BASE}/pool/location`,
+                {
+                  lat: latitude,
+                  lon: longitude,
+                  place: name
+                },
+                { headers }
+              )
+              .catch(() => {});
+          })
+          .finally(() => {
+            load({
+              lat: latitude,
+              lon: longitude
+            });
+          });
+      },
       () => byCity(),
       { timeout: 10000, enableHighAccuracy: true }
     );
@@ -419,9 +437,23 @@ function Dashboard() {
   const riskColor = RISK[riskKey] || RISK.LOW;
 
   const forecastCards = [
-    { label: "Now", temp, rain: rainMm, pop: null, risk: data?.risk },
-    forecast?.h3 && { label: "Next 3 hours", temp: forecast.h3.temp, rain: forecast.h3.rain_mm, pop: forecast.h3.pop, risk: forecast.h3.risk },
-    forecast?.h6 && { label: "Next 6 hours", temp: forecast.h6.temp, rain: forecast.h6.rain_mm, pop: forecast.h6.pop, risk: forecast.h6.risk }
+    { label: "Now", temp, rain: rainMm, pop: null, risk: data?.risk, storm: isStorm },
+    forecast?.h3 && {
+      label: "Next 3 hours",
+      temp: forecast.h3.temp,
+      rain: forecast.h3.rain_mm,
+      pop: forecast.h3.pop,
+      risk: forecast.h3.risk,
+      storm: forecast.h3.condition_id >= 200 && forecast.h3.condition_id <= 232
+    },
+    forecast?.h6 && {
+      label: "Next 6 hours",
+      temp: forecast.h6.temp,
+      rain: forecast.h6.rain_mm,
+      pop: forecast.h6.pop,
+      risk: forecast.h6.risk,
+      storm: forecast.h6.condition_id >= 200 && forecast.h6.condition_id <= 232
+    }
   ].filter(Boolean);
 
   const skel = (w, h = 26) => <span className="zx-skel" style={{ width: w, height: h }} />;
@@ -453,6 +485,11 @@ function Dashboard() {
 
             {data && (
               <div className="zx-chips">
+                {condText && (
+                  <span className="zx-chip" style={{ textTransform: "capitalize" }}>
+                    {isStorm ? "⛈" : "🌤"} {condText}
+                  </span>
+                )}
                 {humidity !== undefined && <span className="zx-chip">💧 Humidity {humidity}%</span>}
                 <span className="zx-chip">🌧 Rain {Number(rainMm).toFixed(1)} mm/h</span>
                 <span className="zx-chip">🌫 AQI {aqi} ({aqiLabel(aqi)})</span>
@@ -663,6 +700,7 @@ function Dashboard() {
                       <p className="zx-fc-label">{c.label}</p>
                       <p className="zx-fc-temp">{Number(c.temp).toFixed(0)}°C</p>
                       <p className="zx-fc-risk">{c.risk}</p>
+                      {c.storm && <p className="zx-fc-meta">⛈ Thunderstorm</p>}
                       <p className="zx-fc-meta">🌧 {Number(c.rain).toFixed(1)} mm/h</p>
                       {c.pop !== null && (
                         <>
