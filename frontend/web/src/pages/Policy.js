@@ -27,13 +27,6 @@ const LEVEL_STYLES = {
   HIGH: { label: "High", color: "#b91c1c", bg: "#fee2e2" },
 };
 
-// Turn a value/limit ratio into a LOW / MEDIUM / HIGH level
-function levelFromRatio(ratio) {
-  if (ratio >= 1) return "HIGH";
-  if (ratio >= 0.5) return "MEDIUM";
-  return "LOW";
-}
-
 function capitalize(text) {
   if (!text) return "";
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -69,83 +62,6 @@ function loadRazorpayScript() {
   });
 }
 
-// One factor tile inside the "Why this price?" card
-function PriceFactor({ icon, title, detail, level, loading }) {
-  const style = LEVEL_STYLES[level] || LEVEL_STYLES.LOW;
-
-  if (loading) {
-    return (
-      <div style={factorBoxStyle}>
-        <div
-          style={{
-            width: 90,
-            height: 12,
-            borderRadius: 6,
-            background: "#e5e7eb",
-            marginBottom: 10,
-            animation: "skeletonPulse 1.2s ease-in-out infinite",
-          }}
-        />
-        <div
-          style={{
-            width: "80%",
-            height: 10,
-            borderRadius: 6,
-            background: "#e5e7eb",
-            marginBottom: 8,
-            animation: "skeletonPulse 1.2s ease-in-out infinite",
-          }}
-        />
-        <div
-          style={{
-            width: 60,
-            height: 10,
-            borderRadius: 6,
-            background: "#e5e7eb",
-            animation: "skeletonPulse 1.2s ease-in-out infinite",
-          }}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div style={factorBoxStyle}>
-      <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
-      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
-        {title}
-      </div>
-      <div style={{ fontSize: 12.5, color: "#64748b", marginBottom: 8 }}>
-        {detail}
-      </div>
-      {level && (
-        <span
-          style={{
-            display: "inline-block",
-            fontSize: 11,
-            fontWeight: 800,
-            color: style.color,
-            background: style.bg,
-            borderRadius: 999,
-            padding: "3px 9px",
-          }}
-        >
-          {style.label} risk
-        </span>
-      )}
-    </div>
-  );
-}
-
-const factorBoxStyle = {
-  flex: 1,
-  minWidth: 200,
-  padding: "14px 16px",
-  background: "#f8fafc",
-  border: "1px solid #e5e7eb",
-  borderRadius: 14,
-};
-
 function Policy() {
   const navigate = useNavigate();
   const { plan, setPlan } = useContext(AppContext);
@@ -157,13 +73,16 @@ function Policy() {
   const [temp, setTemp] = useState(0);
   const [aqi, setAqi] = useState(0);
   const [price, setPrice] = useState(0);
-  const [reason, setReason] = useState("");
   const [rainMm, setRainMm] = useState(0);
   const [outlookRisk, setOutlookRisk] = useState("");
   const [recommendedPlan, setRecommendedPlan] = useState("");
-  const [locationSource, setLocationSource] = useState("saved_city");
   const [dataFallback, setDataFallback] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Pricing explanation data from the backend
+  const [breakdown, setBreakdown] = useState([]);
+  const [band, setBand] = useState([20, 52]);
+  const [upliftPct, setUpliftPct] = useState(0);
 
   // Policy lock
   const [isLocked, setIsLocked] = useState(false);
@@ -223,19 +142,21 @@ function Policy() {
         } catch {}
       }
 
-      setCity(data.city || "Hyderabad");
+      setCity(data.pricing_city || data.city || "Hyderabad");
       setRisk(data.risk || "LOW");
       setTemp(t);
       setAqi(a);
       setRainMm(rm);
       setPrice(data.price || data.ml_price || 20);
-      setReason(data.reason || "Normal conditions");
       setOutlookRisk(data.outlook_risk || data.risk || "LOW");
       setRecommendedPlan(data.recommended_plan || "Basic");
-      setLocationSource(data.location_source || "saved_city");
       setDataFallback(Boolean(data.data_fallback));
+      setBreakdown(data.breakdown || []);
+      setBand(data.band || [20, 52]);
+      setUpliftPct(data.price_uplift_pct || 0);
 
-      const severe = rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
+      // Claims use only the payout thresholds, not the pricing risk level
+      const severe = rm > 7.5 || t > 45 || a > 250;
 
       if (
         severe &&
@@ -580,21 +501,20 @@ function Policy() {
     }
   }
 
-  // Used for the "Covered" chips on each plan card
+  // Used for the coverage chips on each plan card
   const coverageItems = [
     { key: "rain", icon: "🌧️", label: "Rain" },
     { key: "heat", icon: "🔥", label: "Heat" },
     { key: "pollution", icon: "🌫️", label: "Pollution" },
   ];
 
-  // Risk levels shown in the "Why this price?" card
-  const rainLevel = levelFromRatio(rainMm / 7.5);
-  const heatLevel = levelFromRatio(temp / 45);
-  const aqiLevel = levelFromRatio(aqi / 250);
   const cityName = capitalize(city) || "your city";
   const basePrice = plans[0]?.price ?? 0;
-  const moderatePrice = plans[1]?.price ?? 0;
-  const premiumPrice = plans[2]?.price ?? 0;
+  const riskStyle = LEVEL_STYLES[risk] || LEVEL_STYLES.LOW;
+  const markerLeft = Math.min(
+    100,
+    Math.max(0, ((basePrice - 20) / 32) * 100)
+  );
 
   return (
     <section className="scene active">
@@ -846,142 +766,156 @@ function Policy() {
             💡 Why is your price ₹{loading ? "…" : basePrice}/week?
           </h2>
 
-          <p
-            style={{
-              color: "#64748b",
-              fontSize: "13px",
-              margin: "0 0 18px",
-              lineHeight: 1.5,
-            }}
-          >
-            Your price is not the same for everyone. It is set for{" "}
-            <b>where you work</b> and <b>the weather around you</b>. Areas with
-            more rain, heat or pollution see more income-disrupting days, so
-            cover costs more there. Calmer areas pay less.
+          <p style={{ color: "#64748b", fontSize: 13, margin: "0 0 16px" }}>
+            Based on today's weather in your saved city (<b>{cityName}</b>) and
+            the forecast for the next 6 hours.
           </p>
 
-          {/* The three price factors */}
-          <div
-            style={{
-              display: "flex",
-              gap: 12,
-              flexWrap: "wrap",
-              marginBottom: 18,
-            }}
-          >
-            <PriceFactor
-              loading={loading}
-              icon="📍"
-              title="Your location"
-              detail={
-                locationSource === "saved_city"
-                  ? `${cityName} (your saved city). Each city has its own weather history.`
-                  : `${cityName} (your live location). Each area has its own weather history.`
-              }
-            />
-
-            <PriceFactor
-              loading={loading}
-              icon="🌦️"
-              title="Weather right now"
-              detail={`Rain ${Number(rainMm).toFixed(1)} mm/h · ${Number(
-                temp
-              ).toFixed(1)}°C · AQI ${Math.round(aqi)}`}
-              level={
-                [rainLevel, heatLevel, aqiLevel].includes("HIGH")
-                  ? "HIGH"
-                  : [rainLevel, heatLevel, aqiLevel].includes("MEDIUM")
-                  ? "MEDIUM"
-                  : "LOW"
-              }
-            />
-
-            <PriceFactor
-              loading={loading}
-              icon="🔭"
-              title="Coming days"
-              detail="The forecast for the next few days also feeds into your quote."
-              level={outlookRisk || "LOW"}
-            />
-          </div>
-
-          {/* What the backend says about this quote */}
-          {!loading && reason && (
+          {loading ? (
             <div
               style={{
-                padding: "12px 14px",
-                background: "#eef2ff",
-                border: "1px solid #c7d2fe",
-                borderRadius: 12,
-                fontSize: 13,
-                color: "#3730a3",
-                marginBottom: 18,
+                height: 60,
+                borderRadius: 10,
+                background: "#e5e7eb",
+                animation: "skeletonPulse 1.2s ease-in-out infinite",
               }}
-            >
-              <b>Current assessment for {cityName}:</b> {reason}
-            </div>
+            />
+          ) : (
+            <>
+              {/* Risk level + what caused it */}
+              <div style={{ marginBottom: 16 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    color: riskStyle.color,
+                    background: riskStyle.bg,
+                    borderRadius: 999,
+                    padding: "4px 12px",
+                    marginBottom: 10,
+                  }}
+                >
+                  {riskStyle.label} risk today
+                </span>
+
+                <p
+                  style={{
+                    margin: "0 0 4px",
+                    fontSize: 12,
+                    color: "#64748b",
+                  }}
+                >
+                  Now: rain {Number(rainMm).toFixed(1)} mm/h ·{" "}
+                  {Number(temp).toFixed(1)}°C · AQI {Math.round(aqi)}
+                </p>
+
+                {breakdown.length === 0 ? (
+                  <p
+                    style={{
+                      margin: "6px 0 0",
+                      fontSize: 13,
+                      color: "#475569",
+                    }}
+                  >
+                    ✅ Calm weather. Nothing is adding to your price.
+                  </p>
+                ) : (
+                  <ul
+                    style={{
+                      margin: "6px 0 0",
+                      paddingLeft: 18,
+                      fontSize: 13,
+                      color: "#475569",
+                      lineHeight: 1.7,
+                    }}
+                  >
+                    {breakdown.map((f) => (
+                      <li key={f.key}>
+                        {f.label} <b>(+{f.points})</b>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Price band meter */}
+              <div style={{ marginBottom: 16 }}>
+                <div
+                  style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}
+                >
+                  {riskStyle.label} risk prices range from ₹{band[0]} to ₹
+                  {band[1]}
+                </div>
+                <div
+                  style={{
+                    position: "relative",
+                    height: 10,
+                    borderRadius: 999,
+                    background:
+                      "linear-gradient(90deg,#22c55e 0%,#f59e0b 55%,#ef4444 100%)",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: -4,
+                      left: `${markerLeft}%`,
+                      width: 18,
+                      height: 18,
+                      borderRadius: "50%",
+                      background: "#fff",
+                      border: "3px solid #4f46e5",
+                      transform: "translateX(-50%)",
+                    }}
+                  />
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: 11,
+                    color: "#94a3b8",
+                    marginTop: 4,
+                  }}
+                >
+                  <span>₹20</span>
+                  <span>₹52</span>
+                </div>
+              </div>
+
+              {/* Forecast */}
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  fontSize: 13,
+                  marginBottom: 16,
+                  background: upliftPct ? "#fef3c7" : "#f0fdf4",
+                  color: upliftPct ? "#92400e" : "#166534",
+                }}
+              >
+                {upliftPct
+                  ? `⚠️ Weather may get worse in the next 6 hours, so +${upliftPct}% is included in your price.`
+                  : "✅ No worse weather expected in the next 6 hours, so no extra charge."}
+              </div>
+
+              {/* Plans */}
+              <p style={{ margin: "0 0 6px", fontSize: 13, color: "#334155" }}>
+                <b>Plans:</b> Moderate costs about 1.25× Basic and Premium
+                about 1.5×. Cover amounts are ₹5,000, ₹10,000 and ₹20,000.
+              </p>
+              <p style={{ margin: 0, fontSize: 13, color: "#334155" }}>
+                <b>Lock:</b> After you pay, your plan is locked for 7 days.
+              </p>
+            </>
           )}
 
-          {/* How plans relate to each other */}
-          <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>
-            How the three plans are priced
-          </h3>
-
-          <div
-            style={{
-              display: "flex",
-              gap: 10,
-              flexWrap: "wrap",
-              fontSize: 13,
-              color: "#334155",
-              marginBottom: 14,
-            }}
-          >
-            <span style={pricePillStyle}>
-              Basic <b>₹{loading ? "…" : basePrice}</b> (base price)
-            </span>
-            <span style={pricePillStyle}>
-              Moderate <b>₹{loading ? "…" : moderatePrice}</b> (about 1.25× Basic)
-            </span>
-            <span style={pricePillStyle}>
-              Premium <b>₹{loading ? "…" : premiumPrice}</b> (about 1.5× Basic)
-            </span>
-          </div>
-
-          <ul
-            style={{
-              margin: 0,
-              paddingLeft: 18,
-              fontSize: 13,
-              color: "#64748b",
-              lineHeight: 1.7,
-            }}
-          >
-            <li>
-              Higher plans cover more events (rain, heat, pollution) and pay out
-              faster, so they cost more.
-            </li>
-            <li>
-              If conditions in your area get worse, your next quote can go up.
-              If they calm down, it can come down.
-            </li>
-            <li>
-              Your plan price stays fixed for the 7 days after you buy.
-            </li>
-          </ul>
-
-          <p
-            style={{
-              margin: "14px 0 0",
-              fontSize: "12px",
-              color: "#94a3b8",
-            }}
-          >
+          <p style={{ margin: "14px 0 0", fontSize: 12, color: "#94a3b8" }}>
             {dataFallback
-              ? "Weather data for your area is estimated right now, not live. "
+              ? "Weather data is estimated right now, not live. "
               : ""}
-            Final amount is confirmed by the server at checkout. Live weather
-            and payout status are on your Dashboard.
+            The final amount is confirmed by the server at checkout.
           </p>
         </div>
 
@@ -1018,11 +952,5 @@ function Policy() {
     </section>
   );
 }
-
-const pricePillStyle = {
-  padding: "6px 12px",
-  background: "#f1f5f9",
-  borderRadius: 999,
-};
 
 export default Policy;
