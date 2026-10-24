@@ -6,12 +6,6 @@ import axios from "axios";
 
 const API_BASE = "https://zensurex-backend.onrender.com";
 
-const RISK_COLOR = {
-  LOW: "green",
-  MEDIUM: "#f59e0b",
-  HIGH: "#ef4444",
-};
-
 // Simple one-time entrance for all cards
 const gridVariants = {
   hidden: {},
@@ -26,6 +20,19 @@ const cardVariants = {
     transition: { type: "spring", stiffness: 120, damping: 16 },
   },
 };
+
+const LEVEL_STYLES = {
+  LOW: { label: "Low", color: "#166534", bg: "#dcfce7" },
+  MEDIUM: { label: "Moderate", color: "#92400e", bg: "#fef3c7" },
+  HIGH: { label: "High", color: "#b91c1c", bg: "#fee2e2" },
+};
+
+// Turn a value/limit ratio into a LOW / MEDIUM / HIGH level
+function levelFromRatio(ratio) {
+  if (ratio >= 1) return "HIGH";
+  if (ratio >= 0.5) return "MEDIUM";
+  return "LOW";
+}
 
 function capitalize(text) {
   if (!text) return "";
@@ -62,71 +69,82 @@ function loadRazorpayScript() {
   });
 }
 
-// Compact animated circular gauge for a payout trigger
-function TriggerGauge({ icon, label, value, limit, unit, digits }) {
-  const hit = value > limit;
-  const ratio = Math.min(value / limit, 1);
-  const r = 26;
-  const c = 2 * Math.PI * r;
+// One factor tile inside the "Why this price?" card
+function PriceFactor({ icon, title, detail, level, loading }) {
+  const style = LEVEL_STYLES[level] || LEVEL_STYLES.LOW;
 
-  // Green when safe, amber only when close to the limit, red when triggered
-  const color = hit ? "#ef4444" : ratio >= 0.8 ? "#f59e0b" : "#22c55e";
+  if (loading) {
+    return (
+      <div style={factorBoxStyle}>
+        <div
+          style={{
+            width: 90,
+            height: 12,
+            borderRadius: 6,
+            background: "#e5e7eb",
+            marginBottom: 10,
+            animation: "skeletonPulse 1.2s ease-in-out infinite",
+          }}
+        />
+        <div
+          style={{
+            width: "80%",
+            height: 10,
+            borderRadius: 6,
+            background: "#e5e7eb",
+            marginBottom: 8,
+            animation: "skeletonPulse 1.2s ease-in-out infinite",
+          }}
+        />
+        <div
+          style={{
+            width: 60,
+            height: 10,
+            borderRadius: 6,
+            background: "#e5e7eb",
+            animation: "skeletonPulse 1.2s ease-in-out infinite",
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
-    <div style={{ textAlign: "center", flex: 1, minWidth: 120 }}>
-      <svg width="76" height="76" viewBox="0 0 70 70">
-        <circle
-          cx="35"
-          cy="35"
-          r={r}
-          fill="none"
-          stroke="#e5e7eb"
-          strokeWidth="6"
-        />
-        <motion.circle
-          cx="35"
-          cy="35"
-          r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeDasharray={c}
-          initial={{ strokeDashoffset: c }}
-          animate={{ strokeDashoffset: c * (1 - ratio) }}
-          transition={{ duration: 1, ease: "easeOut" }}
-          transform="rotate(-90 35 35)"
-        />
-        <text x="35" y="41" textAnchor="middle" fontSize="18">
-          {icon}
-        </text>
-      </svg>
-
-      <div style={{ fontWeight: 700, fontSize: 13, marginTop: 2 }}>
-        {label}
+    <div style={factorBoxStyle}>
+      <div style={{ fontSize: 22, marginBottom: 4 }}>{icon}</div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+        {title}
       </div>
-
-      <div style={{ fontSize: 12, color: "#64748b" }}>
-        {Number(value).toFixed(digits)} / {limit} {unit}
+      <div style={{ fontSize: 12.5, color: "#64748b", marginBottom: 8 }}>
+        {detail}
       </div>
-
-      <div
-        style={{
-          display: "inline-block",
-          marginTop: 4,
-          fontSize: 10,
-          fontWeight: 800,
-          color: hit ? "#b91c1c" : "#166534",
-          background: hit ? "#fee2e2" : "#dcfce7",
-          borderRadius: 999,
-          padding: "2px 8px",
-        }}
-      >
-        {hit ? "TRIGGERED" : "SAFE"}
-      </div>
+      {level && (
+        <span
+          style={{
+            display: "inline-block",
+            fontSize: 11,
+            fontWeight: 800,
+            color: style.color,
+            background: style.bg,
+            borderRadius: 999,
+            padding: "3px 9px",
+          }}
+        >
+          {style.label} risk
+        </span>
+      )}
     </div>
   );
 }
+
+const factorBoxStyle = {
+  flex: 1,
+  minWidth: 200,
+  padding: "14px 16px",
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
+};
 
 function Policy() {
   const navigate = useNavigate();
@@ -141,11 +159,11 @@ function Policy() {
   const [price, setPrice] = useState(0);
   const [reason, setReason] = useState("");
   const [rainMm, setRainMm] = useState(0);
-  const [forecast, setForecast] = useState(null);
   const [outlookRisk, setOutlookRisk] = useState("");
   const [recommendedPlan, setRecommendedPlan] = useState("");
   const [locationSource, setLocationSource] = useState("saved_city");
   const [dataFallback, setDataFallback] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // Policy lock
   const [isLocked, setIsLocked] = useState(false);
@@ -181,7 +199,7 @@ function Policy() {
     }
   }
 
-  // Fetch risk: GPS first, saved city as fallback
+  // Fetch risk: show saved city instantly, refine with GPS in the background
   useEffect(() => {
     const token = localStorage.getItem("token");
 
@@ -193,10 +211,17 @@ function Policy() {
 
     const headers = { Authorization: `Bearer ${token}` };
 
-    function applyData(data) {
+    function applyData(data, fromCache = false) {
       const t = data.weather?.temp ?? 0;
       const rm = data.weather?.rain_mm ?? 0;
       const a = data.aqi ?? 0;
+
+      setLoading(false);
+      if (!fromCache) {
+        try {
+          sessionStorage.setItem("riskData", JSON.stringify(data));
+        } catch {}
+      }
 
       setCity(data.city || "Hyderabad");
       setRisk(data.risk || "LOW");
@@ -205,7 +230,6 @@ function Policy() {
       setRainMm(rm);
       setPrice(data.price || data.ml_price || 20);
       setReason(data.reason || "Normal conditions");
-      setForecast(data.forecast || null);
       setOutlookRisk(data.outlook_risk || data.risk || "LOW");
       setRecommendedPlan(data.recommended_plan || "Basic");
       setLocationSource(data.location_source || "saved_city");
@@ -213,18 +237,30 @@ function Policy() {
 
       const severe = rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
 
-      if (severe && !data.data_fallback && !claimFired.current) {
+      if (
+        severe &&
+        !data.data_fallback &&
+        !fromCache &&
+        !claimFired.current
+      ) {
         claimFired.current = true;
         autoTriggerClaim(data.reason);
       }
     }
 
-    async function load(params) {
+    let gpsApplied = false;
+
+    async function load(params, isGps = false) {
       try {
         const res = await axios.get(`${API_BASE}/risk/`, {
           headers,
           params,
         });
+
+        // If the GPS result already arrived, ignore the slower saved-city one
+        if (!isGps && gpsApplied) return;
+        if (isGps) gpsApplied = true;
+
         applyData(res.data);
       } catch (err) {
         if (err.response?.status === 401) {
@@ -234,30 +270,33 @@ function Policy() {
           return;
         }
 
-        if (params && params.lat !== undefined) {
-          load({});
-          return;
-        }
+        // GPS request failed: the saved-city data is already loading
+        if (isGps) return;
 
+        setLoading(false);
         console.error(err);
         showToast("Failed to load risk data ❌", "error");
       }
     }
 
-    if (!navigator.geolocation) {
-      load({});
-      return;
-    }
+    // 1. Instant paint from the last visit
+    try {
+      const cached = sessionStorage.getItem("riskData");
+      if (cached) applyData(JSON.parse(cached), true);
+    } catch {}
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) =>
-        load({
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-        }),
-      () => load({}),
-      { timeout: 8000 }
-    );
+    // 2. Fetch immediately with the saved city (no waiting for GPS)
+    load({});
+
+    // 3. Refine with GPS in the background
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) =>
+          load({ lat: pos.coords.latitude, lon: pos.coords.longitude }, true),
+        () => {},
+        { timeout: 5000, maximumAge: 10 * 60 * 1000 }
+      );
+    }
   }, [navigate]);
 
   // Fetch current policy and lock
@@ -541,42 +580,21 @@ function Policy() {
     }
   }
 
-  const payoutTriggers = [
-    {
-      key: "rain",
-      icon: "🌧️",
-      label: "Rain",
-      value: rainMm,
-      limit: 7.5,
-      unit: "mm/h",
-      digits: 1,
-    },
-    {
-      key: "heat",
-      icon: "🔥",
-      label: "Heat",
-      value: temp,
-      limit: 45,
-      unit: "°C",
-      digits: 1,
-    },
-    {
-      key: "pollution",
-      icon: "🌫️",
-      label: "Pollution",
-      value: aqi,
-      limit: 250,
-      unit: "AQI",
-      digits: 0,
-    },
+  // Used for the "Covered" chips on each plan card
+  const coverageItems = [
+    { key: "rain", icon: "🌧️", label: "Rain" },
+    { key: "heat", icon: "🔥", label: "Heat" },
+    { key: "pollution", icon: "🌫️", label: "Pollution" },
   ];
 
-  // Would the user's active plan pay out for anything triggered right now?
-  const myPlanData = plans.find((p) => p.name === plan);
-  const triggeredNow = payoutTriggers.filter((t) => t.value > t.limit);
-  const coveredTriggered = myPlanData
-    ? triggeredNow.filter((t) => myPlanData.covers.includes(t.key))
-    : [];
+  // Risk levels shown in the "Why this price?" card
+  const rainLevel = levelFromRatio(rainMm / 7.5);
+  const heatLevel = levelFromRatio(temp / 45);
+  const aqiLevel = levelFromRatio(aqi / 250);
+  const cityName = capitalize(city) || "your city";
+  const basePrice = plans[0]?.price ?? 0;
+  const moderatePrice = plans[1]?.price ?? 0;
+  const premiumPrice = plans[2]?.price ?? 0;
 
   return (
     <section className="scene active">
@@ -609,6 +627,19 @@ function Policy() {
         <h1 className="page-title" style={{ textAlign: "center" }}>
           Choose Protection Plan
         </h1>
+
+        {!loading && (
+          <p
+            style={{
+              textAlign: "center",
+              color: "#64748b",
+              fontSize: 13,
+              margin: "-6px 0 18px",
+            }}
+          >
+            Weekly prices for <b>{cityName}</b>
+          </p>
+        )}
 
         {isLocked && (
           <div
@@ -745,7 +776,7 @@ function Policy() {
                     ))}
                   </ul>
 
-                  {/* Which triggers this plan covers */}
+                  {/* Which events this plan covers */}
                   <div
                     style={{
                       display: "flex",
@@ -755,7 +786,7 @@ function Policy() {
                       margin: "10px 0",
                     }}
                   >
-                    {payoutTriggers.map((t) => {
+                    {coverageItems.map((t) => {
                       const covered = p.covers.includes(t.key);
 
                       return (
@@ -771,7 +802,7 @@ function Policy() {
                             background: "#f1f5f9",
                           }}
                         >
-                          {t.icon} {covered ? "Covered" : "—"}
+                          {t.icon} {covered ? t.label : "—"}
                         </span>
                       );
                     })}
@@ -799,20 +830,20 @@ function Policy() {
           })}
         </motion.div>
 
-        {/* LIVE PAYOUT TRIGGERS */}
+        {/* WHY THIS PRICE? */}
         <div
           style={{
             maxWidth: "900px",
             margin: "28px auto 0",
-            padding: "20px 22px",
+            padding: "22px",
             background: "#fff",
             border: "1px solid #e5e7eb",
             borderRadius: "18px",
             boxShadow: "0 8px 28px rgba(15,23,42,.05)",
           }}
         >
-          <h2 style={{ margin: "0 0 6px", fontSize: "18px" }}>
-            Live Payout Triggers
+          <h2 style={{ margin: "0 0 6px", fontSize: "19px" }}>
+            💡 Why is your price ₹{loading ? "…" : basePrice}/week?
           </h2>
 
           <p
@@ -820,57 +851,137 @@ function Policy() {
               color: "#64748b",
               fontSize: "13px",
               margin: "0 0 18px",
+              lineHeight: 1.5,
             }}
           >
-            Current conditions for {capitalize(city) || "your saved city"}. A
-            trigger is reached only when the current value exceeds its policy
-            threshold.
+            Your price is not the same for everyone. It is set for{" "}
+            <b>where you work</b> and <b>the weather around you</b>. Areas with
+            more rain, heat or pollution see more income-disrupting days, so
+            cover costs more there. Calmer areas pay less.
           </p>
+
+          {/* The three price factors */}
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              marginBottom: 18,
+            }}
+          >
+            <PriceFactor
+              loading={loading}
+              icon="📍"
+              title="Your location"
+              detail={
+                locationSource === "saved_city"
+                  ? `${cityName} (your saved city). Each city has its own weather history.`
+                  : `${cityName} (your live location). Each area has its own weather history.`
+              }
+            />
+
+            <PriceFactor
+              loading={loading}
+              icon="🌦️"
+              title="Weather right now"
+              detail={`Rain ${Number(rainMm).toFixed(1)} mm/h · ${Number(
+                temp
+              ).toFixed(1)}°C · AQI ${Math.round(aqi)}`}
+              level={
+                [rainLevel, heatLevel, aqiLevel].includes("HIGH")
+                  ? "HIGH"
+                  : [rainLevel, heatLevel, aqiLevel].includes("MEDIUM")
+                  ? "MEDIUM"
+                  : "LOW"
+              }
+            />
+
+            <PriceFactor
+              loading={loading}
+              icon="🔭"
+              title="Coming days"
+              detail="The forecast for the next few days also feeds into your quote."
+              level={outlookRisk || "LOW"}
+            />
+          </div>
+
+          {/* What the backend says about this quote */}
+          {!loading && reason && (
+            <div
+              style={{
+                padding: "12px 14px",
+                background: "#eef2ff",
+                border: "1px solid #c7d2fe",
+                borderRadius: 12,
+                fontSize: 13,
+                color: "#3730a3",
+                marginBottom: 18,
+              }}
+            >
+              <b>Current assessment for {cityName}:</b> {reason}
+            </div>
+          )}
+
+          {/* How plans relate to each other */}
+          <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>
+            How the three plans are priced
+          </h3>
 
           <div
             style={{
               display: "flex",
-              gap: 16,
+              gap: 10,
               flexWrap: "wrap",
-              justifyContent: "space-around",
+              fontSize: 13,
+              color: "#334155",
+              marginBottom: 14,
             }}
           >
-            {payoutTriggers.map((t) => (
-              <TriggerGauge key={t.key} {...t} />
-            ))}
+            <span style={pricePillStyle}>
+              Basic <b>₹{loading ? "…" : basePrice}</b> (base price)
+            </span>
+            <span style={pricePillStyle}>
+              Moderate <b>₹{loading ? "…" : moderatePrice}</b> (about 1.25× Basic)
+            </span>
+            <span style={pricePillStyle}>
+              Premium <b>₹{loading ? "…" : premiumPrice}</b> (about 1.5× Basic)
+            </span>
           </div>
 
-          {isLocked && myPlanData && (
-            <p
-              style={{
-                margin: "16px 0 0",
-                fontSize: "13px",
-                textAlign: "center",
-                color: coveredTriggered.length ? "#166534" : "#64748b",
-                fontWeight: 600,
-              }}
-            >
-              {coveredTriggered.length
-                ? `✅ Your ${plan} plan covers ${coveredTriggered
-                    .map((t) => t.label.toLowerCase())
-                    .join(", ")} right now.`
-                : `Your ${plan} plan is active. No covered trigger is reached right now.`}
-            </p>
-          )}
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 18,
+              fontSize: 13,
+              color: "#64748b",
+              lineHeight: 1.7,
+            }}
+          >
+            <li>
+              Higher plans cover more events (rain, heat, pollution) and pay out
+              faster, so they cost more.
+            </li>
+            <li>
+              If conditions in your area get worse, your next quote can go up.
+              If they calm down, it can come down.
+            </li>
+            <li>
+              Your plan price stays fixed for the 7 days after you buy.
+            </li>
+          </ul>
 
           <p
             style={{
               margin: "14px 0 0",
-              fontSize: "13px",
-              color: "#64748b",
-              textAlign: "center",
+              fontSize: "12px",
+              color: "#94a3b8",
             }}
           >
-            Overall risk:{" "}
-            <b style={{ color: RISK_COLOR[risk] || "#64748b" }}>
-              {risk || "UNKNOWN"}
-            </b>
-            {dataFallback ? " · Weather data is estimated, not live." : ""}
+            {dataFallback
+              ? "Weather data for your area is estimated right now, not live. "
+              : ""}
+            Final amount is confirmed by the server at checkout. Live weather
+            and payout status are on your Dashboard.
           </p>
         </div>
 
@@ -879,12 +990,14 @@ function Policy() {
           <button
             className="btn-primary"
             onClick={handleConfirm}
-            disabled={isLocked || !selectedPlan || paymentLoading}
+            disabled={isLocked || !selectedPlan || paymentLoading || loading}
           >
             {isLocked
               ? "Plan Locked 🔒"
               : paymentLoading
               ? "Opening secure checkout..."
+              : loading
+              ? "Loading your quote..."
               : `Pay ₹${selectedPlan?.price ?? 0}/week with Razorpay`}
           </button>
 
@@ -905,5 +1018,11 @@ function Policy() {
     </section>
   );
 }
+
+const pricePillStyle = {
+  padding: "6px 12px",
+  background: "#f1f5f9",
+  borderRadius: 999,
+};
 
 export default Policy;
