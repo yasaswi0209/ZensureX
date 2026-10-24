@@ -1,6 +1,5 @@
-
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import razorpay
@@ -62,6 +61,15 @@ class VerifyPayment(BaseModel):
 # HELPERS
 # --------------------------------------------------
 
+def _naive_utc(dt):
+    """Convert any datetime to naive UTC so comparisons never fail."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def calculate_plan_price(user, plan: str, quoted_price: Optional[float]):
     """Calculate the premium on the backend, never trust frontend pricing."""
 
@@ -106,17 +114,10 @@ def check_policy_lock(db: Session, user_id: int):
     """Enforce the existing seven-day policy lock on the backend."""
 
     policy = get_latest_policy(db, user_id)
-    now = datetime.utcnow()
 
     if policy and policy.locked_until:
-        locked_until = policy.locked_until
-
-        # Handle timezone-aware database values.
-        if locked_until.tzinfo is not None:
-            from datetime import timezone
-            now = datetime.now(timezone.utc)
-        elif now.tzinfo is not None:
-            now = now.replace(tzinfo=None)
+        locked_until = _naive_utc(policy.locked_until)
+        now = datetime.utcnow()
 
         if locked_until > now:
             raise HTTPException(
@@ -243,6 +244,68 @@ def get_policy_lock_status(
 
 
 # --------------------------------------------------
+# NEW: PLAN + PAYMENT HISTORY FOR THE PROFILE PAGE
+# --------------------------------------------------
+
+@router.get("/history")
+def get_payment_history(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    try:
+        policy = get_latest_policy(db, user.id)
+
+        current = None
+        if policy:
+            locked_until = _naive_utc(policy.locked_until)
+            current = {
+                "plan": policy.plan_name,
+                "premium": policy.premium,
+                "coverage": policy.coverage,
+                "active_until": (
+                    locked_until.isoformat() + "Z" if locked_until else None
+                ),
+                "active": bool(
+                    locked_until and locked_until > datetime.utcnow()
+                ),
+            }
+
+        rows = (
+            db.query(InsurancePayment)
+            .filter(
+                InsurancePayment.user_id == user.id,
+                InsurancePayment.status == "VERIFIED",
+            )
+            .order_by(InsurancePayment.id.desc())
+            .limit(10)
+            .all()
+        )
+
+        payments = []
+        for r in rows:
+            created = getattr(r, "created_at", None)
+            payments.append(
+                {
+                    "plan": r.plan_name,
+                    "amount": r.premium,
+                    "coverage": r.coverage,
+                    "order_id": r.order_id,
+                    "payment_id": r.payment_id,
+                    "date": created.isoformat() if created else None,
+                }
+            )
+
+        return {"current": current, "payments": payments}
+
+    except Exception as exc:
+        print("Payment history error:", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch payment history",
+        )
+
+
+# --------------------------------------------------
 # STEP 1: CREATE RAZORPAY ORDER
 # --------------------------------------------------
 
@@ -316,6 +379,21 @@ def create_payment_order(
 # STEP 2: VERIFY PAYMENT AND ACTIVATE POLICY
 # --------------------------------------------------
 
+def _verify_response(message: str, record, policy):
+    return {
+        "message": message,
+        "plan": record.plan_name,
+        "premium": record.premium,
+        "coverage": record.coverage,
+        "payment_id": record.payment_id,
+        "locked_until": (
+            policy.locked_until.isoformat()
+            if policy and policy.locked_until
+            else None
+        ),
+    }
+
+
 @router.post("/verify-payment")
 def verify_payment(
     data: VerifyPayment,
@@ -344,20 +422,42 @@ def verify_payment(
             detail="Payment order not found",
         )
 
-    # A completed order must not activate or credit the pool twice.
+    # Already finished: return the saved result.
     if record.status == "VERIFIED":
         policy = get_latest_policy(db, user.id)
-        return {
-            "message": "Payment already verified",
-            "plan": record.plan_name,
-            "premium": record.premium,
-            "coverage": record.coverage,
-            "locked_until": (
-                policy.locked_until.isoformat()
-                if policy and policy.locked_until
-                else None
-            ),
-        }
+        return _verify_response("Payment already verified", record, policy)
+
+    # A previous attempt activated the policy but did not finish crediting
+    # the pool. Finish it now. The ref makes the credit safe to repeat.
+    if record.status == "PROCESSING":
+        if record.payment_id != data.razorpay_payment_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Payment does not match this order",
+            )
+        try:
+            zone = zone_pool.zone_of_user(user)
+            zone_pool.add_premium(
+                db,
+                zone,
+                user.id,
+                record.premium,
+                record.plan_name,
+                ref=record.payment_id,
+            )
+            record.status = "VERIFIED"
+            db.commit()
+            policy = get_latest_policy(db, user.id)
+            return _verify_response(
+                "Payment verified and policy activated", record, policy
+            )
+        except Exception as exc:
+            db.rollback()
+            print("Payment retry error:", exc)
+            raise HTTPException(
+                status_code=400,
+                detail="Could not finish processing. Try again.",
+            )
 
     if record.status != "PENDING":
         raise HTTPException(
@@ -426,16 +526,14 @@ def verify_payment(
 
         policy.locked_until = now + timedelta(days=7)
 
-        # Mark processing first so a failed pool operation can be retried.
+        # Mark processing first so a failed pool credit can be retried.
         record.payment_id = data.razorpay_payment_id
         record.status = "PROCESSING"
 
         db.commit()
         db.refresh(policy)
 
-        # IMPORTANT:
-        # Make this operation idempotent in zone_pool before production use.
-        # It must not add the same payment's premium twice on retries.
+        # The ref (payment id) means this payment is credited only once.
         zone = zone_pool.zone_of_user(user)
         zone_pool.add_premium(
             db,
@@ -443,23 +541,16 @@ def verify_payment(
             user.id,
             record.premium,
             record.plan_name,
+            ref=record.payment_id,
         )
 
         record.status = "VERIFIED"
         db.commit()
         db.refresh(policy)
 
-        return {
-            "message": "Payment verified and policy activated",
-            "plan": policy.plan_name,
-            "premium": policy.premium,
-            "coverage": policy.coverage,
-            "locked_until": (
-                policy.locked_until.isoformat()
-                if policy.locked_until
-                else None
-            ),
-        }
+        return _verify_response(
+            "Payment verified and policy activated", record, policy
+        )
 
     except HTTPException:
         db.rollback()
