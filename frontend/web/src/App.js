@@ -18,7 +18,7 @@ import Home from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import Policy from "./pages/Policy";
 import Claims from "./pages/Claims";
-import RiskAnalysis from "./pages/RiskAnalysis";
+
 import PoolDetails from "./pages/PoolDetails";
 import { AuthProvider } from "./pages/AuthContext";
 import { AppProvider } from "./utils/AppContext";
@@ -74,11 +74,7 @@ return(
 </ProtectedRoute>
 } />
 
-<Route path="/risk" element={
-<ProtectedRoute>
-<RiskAnalysis/>
-</ProtectedRoute>
-} />
+
 
 <Route path="/pool" element={
 <ProtectedRoute>
