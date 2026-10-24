@@ -9,7 +9,7 @@ import {
 } from "recharts";
 
 import { useNavigate } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import axios from "axios";
 import L from "leaflet";
@@ -203,17 +203,379 @@ async function lookupPlace(lat, lon) {
     return "";
   }
 }
-function conditionIcon(id, isNight) {
-  if (id >= 200 && id <= 232) return "⛈";
-  if (id >= 300 && id <= 321) return "🌦";
-  if (id >= 500 && id <= 531) return "🌧";
-  if (id >= 600 && id <= 622) return "❄️";
-  if (id >= 701 && id <= 781) return "🌫";
-  if (id === 801) return isNight ? "☁️" : "🌤";
-  if (id === 802) return "⛅";
-  if (id >= 803 && id <= 804) return "☁️";
-  return isNight ? "🌙" : "☀️";      // 800 = clear sky
+
+// Icon picked from the temperature (rain, storm and snow override this in the scene logic)
+function tempIcon(t, isNight) {
+  if (t >= 38) return "🔥";            // extreme heat
+  if (t < 15) return "❄️";             // cold
+  if (isNight) return t >= 25 ? "🌙" : "☁️";
+  if (t >= 35) return "☀️";            // very hot and sunny
+  if (t >= 25) return "⛅";            // warm, partly cloudy
+  return "☁️";                         // 15 to 24°C
 }
+
+/* ------------------------------------------------------------------ */
+/* WEATHER ANIMATIONS                                                  */
+/* ------------------------------------------------------------------ */
+
+// Which animation to play. Rain and storm win, then snow, then temperature.
+//   storm  : very dark clouds (lightning is added separately)
+//   rain   : dark clouds (rain drops come from RainCanvas)
+//   snow   : falling snow, heavy   (snow weather code, or 5°C and below)
+//   cold   : light snow and mist   (below 15°C)
+//   cloudy : drifting clouds       (15 to 24°C)
+//   warm   : sun glow, few clouds  (25 to 34°C)
+//   sunny  : strong sun and rays   (35 to 37°C)
+//   scorch : red sun, heat waves, rising embers (38°C and above)
+function pickFx({ raining, isStorm, isSnow, temp }) {
+  if (raining) return isStorm ? "storm" : "rain";
+  if (isSnow || temp <= 5) return "snow";
+  if (temp < 15) return "cold";
+  if (temp >= 38) return "scorch";
+  if (temp >= 35) return "sunny";
+  if (temp >= 25) return "warm";
+  return "cloudy";
+}
+
+const CLOUD_CFG = {
+  cloudy: { n: 6, color: "#cbd5e1", op: 0.65 },
+  warm: { n: 3, color: "#e8eef7", op: 0.8 },
+  sunny: { n: 1, color: "#e8eef7", op: 0.6 },
+  scorch: { n: 0, color: "#e8eef7", op: 0 },
+  cold: { n: 4, color: "#b6c4d8", op: 0.65 },
+  snow: { n: 6, color: "#94a3b8", op: 0.7 },
+  rain: { n: 6, color: "#64748b", op: 0.6 },
+  storm: { n: 8, color: "#334155", op: 0.75 }
+};
+
+const SKY_MODES = ["cloudy", "warm", "sunny", "scorch", "cold"]; // modes that show moon and stars at night
+const SUN_MODES = ["warm", "sunny", "scorch"];                   // modes that show the sun in the day
+
+function mulberry32(a) {
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function WeatherFX({ mode, night }) {
+  const cfg = CLOUD_CFG[mode] || CLOUD_CFG.cloudy;
+
+  // Random positions are made once per mode so they do not jump on every render
+  const fx = useMemo(() => {
+    const seed = [...mode].reduce((a, c) => a * 31 + c.charCodeAt(0), 7);
+    const r = mulberry32(seed);
+
+    const clouds = Array.from({ length: cfg.n }, () => ({
+      top: 2 + r() * 30,
+      size: 150 + r() * 190,
+      dur: 70 + r() * 80,
+      delay: -r() * 150,
+      op: cfg.op * (0.7 + r() * 0.3)
+    }));
+
+    const flakeCount = mode === "snow" ? 70 : mode === "cold" ? 26 : 0;
+    const flakes = Array.from({ length: flakeCount }, () => ({
+      left: r() * 100,
+      size: 3 + r() * 6,
+      dur: 8 + r() * 10,
+      delay: -r() * 18,
+      dx: (r() - 0.5) * 120,
+      op: 0.6 + r() * 0.4
+    }));
+
+    const emberCount = mode === "scorch" ? 22 : mode === "sunny" ? 8 : 0;
+    const embers = Array.from({ length: emberCount }, () => ({
+      left: r() * 100,
+      size: 2 + r() * 4,
+      dur: 6 + r() * 8,
+      delay: -r() * 12,
+      dx: (r() - 0.5) * 60
+    }));
+
+    const stars = Array.from({ length: 45 }, () => ({
+      left: r() * 100,
+      top: r() * 48,
+      size: 1 + r() * 2,
+      dur: 2 + r() * 4,
+      delay: -r() * 6
+    }));
+
+    return { clouds, flakes, embers, stars };
+  }, [mode, cfg.n, cfg.op]);
+
+  const showSun = !night && SUN_MODES.includes(mode);
+  const showSky = night && SKY_MODES.includes(mode);
+
+  return (
+    <>
+      <style>{`
+        .zxfx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+        .zxfx.night::before { content: ""; position: absolute; inset: 0; background: rgba(15, 23, 42, 0.10); }
+
+        /* clouds */
+        .zxfx-cloud {
+          position: absolute; left: 0;
+          filter: drop-shadow(0 6px 12px rgba(71, 85, 105, 0.25));
+          animation: zxfx-drift linear infinite; will-change: transform;
+        }
+        .zxfx.night .zxfx-cloud { filter: brightness(0.5) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.3)); }
+
+        /* snow */
+        .zxfx-flake {
+          position: absolute; top: 0; border-radius: 50%;
+          background: radial-gradient(circle at 35% 35%, #ffffff, #dbeafe 70%);
+          box-shadow: 0 0 6px rgba(96, 165, 250, 0.9);
+          animation: zxfx-fall linear infinite; will-change: transform;
+        }
+
+        /* cold mist */
+        .zxfx-mist {
+          position: absolute; left: -10%; right: -10%; bottom: 0; height: 34vh;
+          background:
+            radial-gradient(ellipse at 30% 100%, rgba(219, 234, 254, 0.75), transparent 60%),
+            radial-gradient(ellipse at 75% 100%, rgba(226, 232, 240, 0.65), transparent 60%);
+          animation: zxfx-mist 14s ease-in-out infinite alternate;
+        }
+
+        /* sun */
+        .zxfx.m-warm   { --s1: rgba(255, 224, 130, 0.65); --s2: rgba(255, 206, 90, 0.28);  --r1: rgba(255, 226, 140, 0.20); }
+        .zxfx.m-sunny  { --s1: rgba(255, 205, 70, 0.80);  --s2: rgba(255, 176, 40, 0.38);  --r1: rgba(255, 200, 80, 0.28); }
+        .zxfx.m-scorch { --s1: rgba(255, 120, 40, 0.85);  --s2: rgba(255, 70, 30, 0.42);   --r1: rgba(255, 110, 40, 0.30); }
+        .zxfx-sun {
+          position: absolute; top: -140px; right: -140px; width: 460px; height: 460px; border-radius: 50%;
+          background: radial-gradient(circle, var(--s1) 0%, var(--s2) 38%, transparent 70%);
+          animation: zxfx-pulse 6s ease-in-out infinite;
+        }
+        .zxfx-rays {
+          position: absolute; top: -300px; right: -300px; width: 760px; height: 760px; border-radius: 50%;
+          background: repeating-conic-gradient(from 0deg, var(--r1) 0 6deg, transparent 6deg 24deg);
+          -webkit-mask-image: radial-gradient(circle, #000 8%, transparent 62%);
+          mask-image: radial-gradient(circle, #000 8%, transparent 62%);
+          animation: zxfx-spin 90s linear infinite;
+        }
+
+        /* heat waves (38°C and above) */
+        .zxfx-heat {
+          position: absolute; left: 0; right: 0; bottom: 0; height: 42vh;
+          background: linear-gradient(to top, rgba(255, 106, 40, 0.22), rgba(255, 160, 60, 0.08) 60%, transparent);
+        }
+        .zxfx-heat::after {
+          content: ""; position: absolute; inset: 0;
+          background: repeating-linear-gradient(to top, rgba(255, 255, 255, 0.10) 0 5px, transparent 5px 22px);
+          -webkit-mask-image: linear-gradient(to top, #000, transparent);
+          mask-image: linear-gradient(to top, #000, transparent);
+          animation: zxfx-heat 3s ease-in-out infinite;
+        }
+
+        /* rising embers and dust (hot weather) */
+        .zxfx-ember {
+          position: absolute; bottom: -10px; border-radius: 50%;
+          background: radial-gradient(circle, #ffd27a, #ff7a1a 70%);
+          box-shadow: 0 0 8px rgba(255, 120, 30, 0.9);
+          animation: zxfx-rise linear infinite; will-change: transform;
+        }
+
+        /* night: moon and stars */
+        .zxfx-moon {
+          position: absolute; top: 84px; right: 9%; width: 72px; height: 72px; border-radius: 50%;
+          background: radial-gradient(circle at 35% 35%, #ffffff, #e2e8f0 55%, #94a3b8);
+          box-shadow: 0 0 50px 18px rgba(226, 232, 240, 0.35);
+        }
+        .zxfx-star {
+          position: absolute; border-radius: 50%; background: #ffffff;
+          box-shadow: 0 0 5px 1px rgba(59, 130, 246, 0.9);
+          animation: zxfx-twinkle ease-in-out infinite;
+        }
+
+        @keyframes zxfx-drift   { from { transform: translateX(-45vw); } to { transform: translateX(115vw); } }
+        @keyframes zxfx-fall    { from { transform: translate3d(0, -8vh, 0); } to { transform: translate3d(var(--dx), 108vh, 0); } }
+        @keyframes zxfx-rise    { 0% { transform: translate3d(0, 0, 0); opacity: 0; } 15% { opacity: 0.85; } 100% { transform: translate3d(var(--dx), -70vh, 0); opacity: 0; } }
+        @keyframes zxfx-twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+        @keyframes zxfx-spin    { to { transform: rotate(360deg); } }
+        @keyframes zxfx-pulse   { 0%, 100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.08); opacity: 1; } }
+        @keyframes zxfx-heat    { 0% { background-position: 0 0; transform: skewX(0); } 50% { transform: skewX(1.2deg); } 100% { background-position: 0 -88px; transform: skewX(0); } }
+        @keyframes zxfx-mist    { from { transform: translateX(-10%); } to { transform: translateX(10%); } }
+
+        @media (prefers-reduced-motion: reduce) {
+          .zxfx *, .zxfx *::after { animation: none !important; }
+        }
+      `}</style>
+
+      <div className={`zxfx m-${mode} ${night ? "night" : ""}`} aria-hidden="true">
+
+        {showSun && <div className="zxfx-rays" />}
+        {showSun && <div className="zxfx-sun" />}
+
+        {showSky && <div className="zxfx-moon" />}
+        {showSky &&
+          fx.stars.map((s, i) => (
+            <span
+              key={`st${i}`}
+              className="zxfx-star"
+              style={{
+                left: `${s.left}%`,
+                top: `${s.top}%`,
+                width: s.size,
+                height: s.size,
+                animationDuration: `${s.dur}s`,
+                animationDelay: `${s.delay}s`
+              }}
+            />
+          ))}
+
+        {mode === "scorch" && <div className="zxfx-heat" />}
+
+        {fx.clouds.map((c, i) => (
+          <svg
+            key={`c${i}`}
+            className="zxfx-cloud"
+            viewBox="0 0 220 110"
+            width={c.size}
+            height={c.size / 2}
+            style={{
+              top: `${c.top}%`,
+              color: cfg.color,
+              opacity: c.op,
+              animationDuration: `${c.dur}s`,
+              animationDelay: `${c.delay}s`
+            }}
+          >
+            <g fill="currentColor">
+              <circle cx="60" cy="68" r="34" />
+              <circle cx="105" cy="48" r="44" />
+              <circle cx="155" cy="66" r="36" />
+              <rect x="40" y="64" width="150" height="38" rx="19" />
+            </g>
+          </svg>
+        ))}
+
+        {mode === "cold" && <div className="zxfx-mist" />}
+
+        {fx.flakes.map((f, i) => (
+          <span
+            key={`f${i}`}
+            className="zxfx-flake"
+            style={{
+              left: `${f.left}%`,
+              width: f.size,
+              height: f.size,
+              opacity: f.op,
+              "--dx": `${f.dx}px`,
+              animationDuration: `${f.dur}s`,
+              animationDelay: `${f.delay}s`
+            }}
+          />
+        ))}
+
+        {fx.embers.map((e, i) => (
+          <span
+            key={`e${i}`}
+            className="zxfx-ember"
+            style={{
+              left: `${e.left}%`,
+              width: e.size,
+              height: e.size,
+              "--dx": `${e.dx}px`,
+              animationDuration: `${e.dur}s`,
+              animationDelay: `${e.delay}s`
+            }}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+// Lightning flashes for thunderstorms. Random timing, skipped if the user prefers reduced motion.
+function Lightning() {
+  const [flash, setFlash] = useState(false);
+  const [boltX, setBoltX] = useState(50);
+
+  useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return undefined;
+
+    const timers = [];
+    let stopped = false;
+
+    const later = (fn, ms) => {
+      const id = setTimeout(fn, ms);
+      timers.push(id);
+    };
+
+    function strike() {
+      if (stopped) return;
+      setBoltX(10 + Math.random() * 80);
+      setFlash(true);
+      later(() => setFlash(false), 110);
+      // quick second flash, like real lightning
+      later(() => setFlash(true), 230);
+      later(() => setFlash(false), 330);
+      // next strike in 4 to 11 seconds
+      later(strike, 4000 + Math.random() * 7000);
+    }
+
+    later(strike, 800);
+
+    return () => {
+      stopped = true;
+      timers.forEach(clearTimeout);
+    };
+  }, []);
+
+  return (
+    <>
+      <style>{`
+        .zx-storm-dim {
+          position: fixed; inset: 0; pointer-events: none; z-index: 3;
+          background: rgba(15, 23, 42, 0.10);
+        }
+        .zx-flash {
+          position: fixed; inset: 0; pointer-events: none; z-index: 4;
+          background: radial-gradient(circle at var(--bx) 0%, rgba(255,255,255,0.95), rgba(191,219,254,0.55) 45%, rgba(147,197,253,0.15) 80%);
+          opacity: 0; transition: opacity 60ms ease-out;
+        }
+        .zx-flash.on { opacity: 1; }
+        .zx-bolt {
+          position: fixed; top: 0; height: 60vh; width: 120px; pointer-events: none; z-index: 4;
+          opacity: 0; transition: opacity 60ms ease-out;
+          filter: drop-shadow(0 0 12px rgba(250, 250, 255, 0.95));
+        }
+        .zx-bolt.on { opacity: 1; }
+      `}</style>
+
+      <div className="zx-storm-dim" />
+      <div className={`zx-flash ${flash ? "on" : ""}`} style={{ "--bx": `${boltX}%` }} />
+      <svg
+        className={`zx-bolt ${flash ? "on" : ""}`}
+        style={{ left: `calc(${boltX}% - 60px)` }}
+        viewBox="0 0 120 400"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <polyline
+          points="70,0 50,110 78,120 40,230 66,238 30,400"
+          fill="none"
+          stroke="#ffffff"
+          strokeWidth="5"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        <polyline
+          points="52,112 20,170"
+          fill="none"
+          stroke="#e0ecff"
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+      </svg>
+    </>
+  );
+}
+
 function Dashboard() {
 
   const navigate = useNavigate();
@@ -247,10 +609,11 @@ function Dashboard() {
   const forecast = data?.forecast || null;
   const next6 = forecast?.h6?.risk || "";
 
-  // ---- weather condition from OpenWeather (NEW) ----
+  // ---- weather condition from OpenWeather ----
   const condId = data?.weather?.condition_id ?? 800;
   const condText = data?.weather?.description || data?.weather?.condition || "";
   const isStorm = condId >= 200 && condId <= 232;          // thunderstorm
+  const isSnow = condId >= 600 && condId <= 622;          // snow
   const apiSaysRain = data?.weather?.rain === 1;           // backend flag: rain, drizzle or storm
 
   // ---- rain effect: real rain, or ?rain=1 / ?rain=2 to preview ----
@@ -261,18 +624,26 @@ function Dashboard() {
     ? (demo === "2" ? 1 : 0.6)
     : Math.min(1, 0.25 + rainMm / 10 + (isStorm ? 0.4 : 0));
 
+  // AQI is no longer used for the scene or the risk, it is only shown as a chip
   let scene = "clear";
   if (raining) scene = "rain";
   else if (temp > 38) scene = "hot";
-  else if (aqi > 200) scene = "smog";
 
   const hour = new Date().getHours();
   const isNight = hour >= 19 || hour < 6;
-let sceneIcon;
-if (scene === "rain") sceneIcon = isStorm ? "⛈" : "🌧";
-else if (scene === "hot") sceneIcon = "🔥";
-else if (scene === "smog") sceneIcon = "🌫";
-else sceneIcon = conditionIcon(condId, isNight);
+
+  // ---- weather animation layer ----
+  // Preview any animation with ?fx=storm|rain|snow|cold|cloudy|warm|sunny|scorch and ?night=1
+  const urlParams = new URLSearchParams(window.location.search);
+  const fxDemo = urlParams.get("fx");
+  const nightFx = isNight || urlParams.get("night") === "1";
+  const fxMode = fxDemo || (data ? pickFx({ raining, isStorm, isSnow, temp }) : null);
+
+  let sceneIcon;
+  if (scene === "rain") sceneIcon = isStorm ? "⛈" : "🌧";
+  else if (isSnow) sceneIcon = "🌨";
+  else if (scene === "hot") sceneIcon = "🔥";
+  else sceneIcon = tempIcon(temp, isNight);
 
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
@@ -472,7 +843,9 @@ else sceneIcon = conditionIcon(condId, isNight);
 
     <section className="scene active">
 
+      {fxMode && <WeatherFX mode={fxMode} night={nightFx} />}
       {raining && <RainCanvas intensity={rainIntensity} storm={stormy} />}
+      {isStorm && <Lightning />}
 
       <div className="zx-page">
 
