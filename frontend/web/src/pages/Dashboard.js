@@ -203,7 +203,17 @@ async function lookupPlace(lat, lon) {
     return "";
   }
 }
-
+function conditionIcon(id, isNight) {
+  if (id >= 200 && id <= 232) return "⛈";
+  if (id >= 300 && id <= 321) return "🌦";
+  if (id >= 500 && id <= 531) return "🌧";
+  if (id >= 600 && id <= 622) return "❄️";
+  if (id >= 701 && id <= 781) return "🌫";
+  if (id === 801) return isNight ? "☁️" : "🌤";
+  if (id === 802) return "⛅";
+  if (id >= 803 && id <= 804) return "☁️";
+  return isNight ? "🌙" : "☀️";      // 800 = clear sky
+}
 function Dashboard() {
 
   const navigate = useNavigate();
@@ -257,12 +267,12 @@ function Dashboard() {
   else if (aqi > 200) scene = "smog";
 
   const hour = new Date().getHours();
-  const sceneIcon = {
-    rain: isStorm ? "⛈" : "🌧",
-    hot: "🔥",
-    smog: "🌫",
-    clear: hour >= 19 || hour < 6 ? "🌙" : "☀️"
-  }[scene];
+  const isNight = hour >= 19 || hour < 6;
+let sceneIcon;
+if (scene === "rain") sceneIcon = isStorm ? "⛈" : "🌧";
+else if (scene === "hot") sceneIcon = "🔥";
+else if (scene === "smog") sceneIcon = "🌫";
+else sceneIcon = conditionIcon(condId, isNight);
 
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
