@@ -7,7 +7,6 @@ from app.db.session import get_db
 from app.models.user import User
 from app.api.deps import get_current_user
 from app.ml.premium_model import calculate_premium
-from app.ml.premium_model import calculate_premium
 from app.services import zone_pool
 from app.utils.weather_api import (
     get_weather_data,
@@ -28,17 +27,24 @@ LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 LEVEL_NAMES = ["LOW", "MEDIUM", "HIGH"]
 PLAN_FOR_LEVEL = {"LOW": "Basic", "MEDIUM": "Moderate", "HIGH": "Premium"}
 
+# OpenWeather condition codes
+# 2xx = thunderstorm, 5xx = rain
+STORM_IDS = range(200, 233)                       # 200-232
+WET_IDS = (501, 502, 503, 504, 511, 521, 522, 531)  # moderate rain and heavier
 
-def live_level(temp, rain_mm, aqi):
+
+def live_level(temp, rain_mm, aqi, cond_id=800):
     """Minimum risk level implied by the given conditions."""
+    cond_id = cond_id or 800
     level = "LOW"
-    if rain_mm > 2.5 or temp > 35 or aqi > 150:
+    if rain_mm > 2.5 or temp > 35 or aqi > 150 or cond_id in WET_IDS:
         level = "MEDIUM"                      # orange
     if (
         rain_mm > 7.5
         or temp > 40
         or aqi > 200
         or (rain_mm > 2.5 and (temp > 35 or aqi > 150))
+        or cond_id in STORM_IDS               # thunderstorm, even with 0 mm rain
     ):
         level = "HIGH"                        # red
     return level
@@ -50,6 +56,8 @@ def worst(*levels):
 
 def slot_note(label, slot):
     parts = []
+    if slot.get("condition_id") in STORM_IDS:
+        parts.append("thunderstorm")
     if slot["rain_mm"] > 0:
         parts.append(f"rain {slot['rain_mm']:.1f} mm/h")
     parts.append(f"{slot['temp']:.0f}°C")
@@ -70,13 +78,15 @@ def get_risk(
 
     saved_city = getattr(db_user, "location", None) or "Hyderabad"
     used_gps = lat is not None and lon is not None
-        # Remember where the worker is, so they join the pool of that area
+
+    # Remember where the worker is, so they join the pool of that area
     try:
         if used_gps:
             zone_pool.save_user_position(db, db_user, lat, lon)
     except Exception as e:
         db.rollback()
         print("Zone save failed:", e)
+
     # Pricing always uses the saved profile city
     pricing_city = "Hyderabad" if DEMO_MODE else saved_city
     display_city = city or pricing_city
@@ -94,22 +104,25 @@ def get_risk(
     # Demo override
     if DEMO_MODE:
         if DEMO_SCENARIO == "LOW":
-            weather.update(temp=28, rain=0, rain_mm=0)
+            weather.update(temp=28, rain=0, rain_mm=0, condition="Clear", condition_id=800)
             aqi = 80
         elif DEMO_SCENARIO == "MEDIUM":
-            weather.update(temp=36, rain=0, rain_mm=0)
+            weather.update(temp=36, rain=0, rain_mm=0, condition="Clear", condition_id=800)
             aqi = 150
         elif DEMO_SCENARIO == "HIGH":
-            weather.update(temp=42, rain=1, rain_mm=8)
+            weather.update(temp=42, rain=1, rain_mm=8, condition="Rain", condition_id=502)
             aqi = 250
         demo_slot = {
             "temp": weather["temp"], "humidity": 50, "rain": weather["rain"],
             "rain_mm": weather["rain_mm"], "pop": 50, "dt": None,
+            "condition": weather.get("condition", ""),
+            "condition_id": weather.get("condition_id", 800),
         }
         forecast = {"h3": dict(demo_slot), "h6": dict(demo_slot)}
 
     temp = weather.get("temp", 30)
     rain_mm = weather.get("rain_mm", 0) or 0   # mm per hour
+    cond_id = weather.get("condition_id", 800)
 
     explanation = []
 
@@ -120,10 +133,14 @@ def get_risk(
     else:
         explanation.append("Temperature is within safe range")
 
-    if rain_mm > 7.5:
+    if cond_id in STORM_IDS:
+        explanation.append("Thunderstorm detected, risk of sudden heavy rain and lightning")
+    elif rain_mm > 7.5:
         explanation.append("Heavy rain (>7.5 mm/h) raises delay and accident risk")
     elif rain_mm > 2.5:
         explanation.append("Moderate rain (>2.5 mm/h) may cause delays")
+    elif cond_id in WET_IDS or rain_mm > 0:
+        explanation.append("Rain in the area, may cause minor delays")
     else:
         explanation.append("No significant rainfall right now")
 
@@ -142,7 +159,7 @@ def get_risk(
     risk = premium_data["risk_level"]
 
     # Live conditions set a minimum level; ML can only raise it
-    live = live_level(temp, rain_mm, aqi)
+    live = live_level(temp, rain_mm, aqi, cond_id)
     if LEVELS[live] > LEVELS.get(risk, 0):
         risk = live
 
@@ -153,7 +170,9 @@ def get_risk(
         forecast_out = {}
         for key, label in (("h3", "Next 3h"), ("h6", "Next 6h")):
             slot = dict(forecast[key])
-            slot["risk"] = live_level(slot["temp"], slot["rain_mm"], aqi)
+            slot["risk"] = live_level(
+                slot["temp"], slot["rain_mm"], aqi, slot.get("condition_id", 800)
+            )
             forecast_out[key] = slot
             outlook_notes.append(slot_note(label, slot))
 
