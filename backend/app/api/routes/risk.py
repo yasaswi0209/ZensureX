@@ -23,8 +23,8 @@ router = APIRouter()
 DEMO_MODE = False
 DEMO_SCENARIO = "HIGH"   # LOW / MEDIUM / HIGH
 
-# TEST ONLY: fakes a thunderstorm for every user. Set to False after testing.
-TEST_STORM = True
+# TEST ONLY: fakes a thunderstorm for every user. Keep False in production.
+TEST_STORM = False
 
 LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 LEVEL_NAMES = ["LOW", "MEDIUM", "HIGH"]
@@ -32,24 +32,40 @@ PLAN_FOR_LEVEL = {"LOW": "Basic", "MEDIUM": "Moderate", "HIGH": "Premium"}
 
 # OpenWeather condition codes
 # 2xx = thunderstorm, 5xx = rain
-STORM_IDS = range(200, 233)                       # 200-232
+STORM_IDS = range(200, 233)                         # 200-232
 WET_IDS = (501, 502, 503, 504, 511, 521, 522, 531)  # moderate rain and heavier
 
+# Temperature limits (°C)
+HOT_MEDIUM = 35
+HOT_HIGH = 40
+COLD_MEDIUM = 15    # below this = MEDIUM
+COLD_HIGH = 5       # below this = HIGH
 
-def live_level(temp, rain_mm, aqi, cond_id=800):
-    """Minimum risk level implied by the given conditions."""
+
+def live_level(temp, rain_mm, cond_id=800):
+    """Minimum risk level from rain, storm and temperature only. AQI is not used."""
     cond_id = cond_id or 800
     level = "LOW"
-    if rain_mm > 2.5 or temp > 35 or aqi > 150 or cond_id in WET_IDS:
-        level = "MEDIUM"                      # orange
+
+    # MEDIUM (orange)
+    if (
+        rain_mm > 2.5
+        or temp > HOT_MEDIUM
+        or temp < COLD_MEDIUM
+        or cond_id in WET_IDS
+    ):
+        level = "MEDIUM"
+
+    # HIGH (red)
     if (
         rain_mm > 7.5
-        or temp > 40
-        or aqi > 200
-        or (rain_mm > 2.5 and (temp > 35 or aqi > 150))
+        or temp > HOT_HIGH
+        or temp < COLD_HIGH
+        or (rain_mm > 2.5 and temp > HOT_MEDIUM)
         or cond_id in STORM_IDS               # thunderstorm, even with 0 mm rain
     ):
-        level = "HIGH"                        # red
+        level = "HIGH"
+
     return level
 
 
@@ -123,7 +139,7 @@ def get_risk(
         }
         forecast = {"h3": dict(demo_slot), "h6": dict(demo_slot)}
 
-    # TEST ONLY: fake thunderstorm (turn off with TEST_STORM = False)
+    # TEST ONLY: fake thunderstorm (turn on with TEST_STORM = True)
     if TEST_STORM:
         weather["condition_id"] = 211
         weather["condition"] = "Thunderstorm"
@@ -136,10 +152,14 @@ def get_risk(
 
     explanation = []
 
-    if temp > 40:
+    if temp > HOT_HIGH:
         explanation.append("Extreme heat (>40°C) increases fatigue risk")
-    elif temp > 35:
+    elif temp > HOT_MEDIUM:
         explanation.append("High temperature affects worker performance")
+    elif temp < COLD_HIGH:
+        explanation.append("Very cold weather (<5°C) is risky for riders")
+    elif temp < COLD_MEDIUM:
+        explanation.append("Low temperature (<15°C) may affect riding conditions")
     else:
         explanation.append("Temperature is within safe range")
 
@@ -154,14 +174,8 @@ def get_risk(
     else:
         explanation.append("No significant rainfall right now")
 
-    if aqi > 200:
-        explanation.append("Severe pollution impacts health")
-    elif aqi > 150:
-        explanation.append("Unhealthy air quality detected")
-    elif aqi > 100:
-        explanation.append("Moderate pollution detected")
-    else:
-        explanation.append("Air quality is safe")
+    # AQI is shown for information only and does not change the risk level
+    explanation.append(f"Air quality index {aqi} (not used for risk)")
 
     # ML core (priced on saved city)
     premium_data = calculate_premium(pricing_city)
@@ -169,11 +183,11 @@ def get_risk(
     risk = premium_data["risk_level"]
 
     # Live conditions set a minimum level; ML can only raise it
-    live = live_level(temp, rain_mm, aqi, cond_id)
+    live = live_level(temp, rain_mm, cond_id)
     if LEVELS[live] > LEVELS.get(risk, 0):
         risk = live
 
-    # Forecast risk for the next 3h and 6h (AQI stays at the current value)
+    # Forecast risk for the next 3h and 6h (rain, storm and temperature only)
     forecast_out = None
     outlook_notes = []
     if forecast:
@@ -181,7 +195,7 @@ def get_risk(
         for key, label in (("h3", "Next 3h"), ("h6", "Next 6h")):
             slot = dict(forecast[key])
             slot["risk"] = live_level(
-                slot["temp"], slot["rain_mm"], aqi, slot.get("condition_id", 800)
+                slot["temp"], slot["rain_mm"], slot.get("condition_id", 800)
             )
             forecast_out[key] = slot
             outlook_notes.append(slot_note(label, slot))
