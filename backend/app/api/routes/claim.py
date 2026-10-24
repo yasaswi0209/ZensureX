@@ -1,21 +1,26 @@
+import os
+import random
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
+
 from app.models.claim import Claim
 from app.models.user import User
 from app.api.deps import get_current_user
 from app.services import zone_pool
-
 from app.db.session import get_db
-from app.services.claim_service import create_claim, auto_claim_logic
+from app.services.claim_service import create_claim, auto_claim_logic, perils_for_plan
 from app.utils.weather_api import get_weather_data, get_aqi_data
-
-import random
-from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/claims", tags=["Claims"])
 
 
 COOLDOWN_MINUTES = 10   # one auto payout per worker per 10 minutes (protects the pool)
+
+# True  = the "trigger" button works (good for demos).
+# False = only real weather counts. Set DEMO_TRIGGERS=false in Render before sharing widely.
+DEMO_TRIGGERS = os.getenv("DEMO_TRIGGERS", "true").strip().lower() == "true"
 
 
 @router.post("/auto")
@@ -27,7 +32,7 @@ def auto_claim(
     # The logged-in worker is always the claimant. user_id / city in the body are ignored.
     user_id = user.id
     city = user.location or "Hyderabad"
-    trigger = request.get("trigger")
+    trigger = request.get("trigger") if DEMO_TRIGGERS else None
     zone = zone_pool.zone_of_user(user)
 
     # 1. Only workers with an active (paid, unexpired) plan can be paid
@@ -65,6 +70,8 @@ def auto_claim(
         rain = weather.get("rain", 0)
         condition = weather.get("condition", "clear")
 
+        is_curfew = False
+
         if trigger == "rain":
             orders = random.randint(1, 4)
             rain = max(rain, 60)
@@ -76,15 +83,18 @@ def auto_claim(
             aqi = max(aqi, 180)
         elif trigger == "curfew":
             orders = 0
-            aqi = max(aqi, 320)
+            is_curfew = True          # curfew only comes from the demo trigger
         else:
             orders = random.randint(8, 15)
 
-        is_curfew = (temp > 45 or aqi > 300)
-
         weather_data = {"type": "rain" if rain > 0 else condition, "temp": temp, "rain": rain}
 
-        amount, reason, risk_score = auto_claim_logic(weather_data, aqi, orders, is_curfew)
+        # The plan decides which events it pays for
+        covered = perils_for_plan(policy.plan_name)
+
+        amount, reason, risk_score = auto_claim_logic(
+            weather_data, aqi, orders, is_curfew, covered
+        )
 
         if amount <= 0:
             return {
@@ -136,8 +146,8 @@ def auto_claim(
 
     except Exception as e:
         db.rollback()
-        print("❌ ERROR:", str(e))
-        return {"message": "Server error", "error": str(e), "status": "failed", "payment": None}
+        print("ERROR in /claims/auto:", str(e))   # full error stays in the server log only
+        return {"message": "Server error. Please try again.", "status": "failed", "payment": None}
 
 
 @router.get("/recent")
@@ -162,8 +172,6 @@ def get_recent_claims(db: Session = Depends(get_db), user: User = Depends(get_cu
 
 @router.get("/weather/{city}")
 def get_weather(city: str):
-    from app.utils.weather_api import get_weather_data, get_aqi_data
-
     weather = get_weather_data(city) or {}
     aqi = get_aqi_data(city) or 100
 
