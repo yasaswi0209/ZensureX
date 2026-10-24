@@ -42,6 +42,17 @@ const PLAN_COVERS = {
   Premium: ["rain", "heat", "pollution", "demand", "accident"]
 };
 
+// Real payout tiers from the backend auto_claim_logic: [limit, payout in ₹]
+// Payouts add up across perils, capped at ₹700 in total, minimum ₹150 once anything triggers.
+const TRIGGERS = [
+  { key: "rain", cover: "rain", icon: "🌧", label: "Heavy rain", unit: " mm", max: 100,
+    tiers: [[20, 150], [50, 250], [80, 350]] },
+  { key: "heat", cover: "heat", icon: "🔥", label: "Extreme heat", unit: "°C", max: 50,
+    tiers: [[40, 150], [45, 250]] },
+  { key: "aqi", cover: "pollution", icon: "🌫", label: "High pollution (AQI)", unit: "", max: 500,
+    tiers: [[150, 150], [300, 250]] }
+];
+
 function aqiLabel(a) {
   if (a <= 50) return "Good";
   if (a <= 100) return "Satisfactory";
@@ -701,21 +712,97 @@ function Lightning() {
   );
 }
 
+// Shows how close live conditions are to each payout limit. "Simulate" is for demos.
+function TriggerCard({ temp, rainMm, aqi, covered, ready }) {
+  const [simulate, setSimulate] = useState(false);
+  const [sim, setSim] = useState({ rain: 0, heat: 30, aqi: 100 });
+
+  const live = { rain: Number(rainMm) || 0, heat: Number(temp) || 0, aqi: Number(aqi) || 0 };
+  const values = simulate ? sim : live;
+
+  const statusOf = (v, limit) =>
+    v >= limit
+      ? { text: "Payout triggers", color: RISK.HIGH }
+      : v >= limit * 0.7
+      ? { text: "Close", color: RISK.MEDIUM }
+      : { text: "Safe", color: RISK.LOW };
+
+  return (
+    <div className="zx-card zx-rise" style={{ "--i": 10 }}>
+      <div className="zx-card-head">
+        <div>
+          <h3 className="zx-card-title">Payout triggers</h3>
+          <p className="zx-card-sub">
+            {simulate
+              ? "Demo mode: drag the sliders to test a payout."
+              : "How close conditions are to an automatic payout."}
+          </p>
+        </div>
+        <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={simulate} onChange={e => setSimulate(e.target.checked)} />
+          Simulate
+        </label>
+      </div>
+
+      {!ready && !simulate ? (
+        <span className="zx-skel" style={{ width: "100%", height: 110 }} />
+      ) : (
+        TRIGGERS.map(t => {
+          const v = values[t.key];
+          const limit = t.tiers[0][0];
+          const s = statusOf(v, limit);
+          const hit = [...t.tiers].reverse().find(([at]) => v >= at);
+          const inPlan = covered.includes(t.cover);
+          return (
+            <div key={t.key} style={{ padding: "10px 0", opacity: inPlan ? 1 : 0.5 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 600 }}>
+                <span>{t.icon} {t.label}</span>
+                <span style={{ color: inPlan ? s.color : "#64748b" }}>{inPlan ? s.text : "Not in plan"}</span>
+              </div>
+              <div className="zx-bar" style={{ margin: "6px 0 4px" }}>
+                <div
+                  className="zx-bar-fill"
+                  style={{ width: `${Math.min((v / t.limit) * 100, 100)}%`, background: s.color }}
+                />
+              </div>
+              <p className="zx-muted" style={{ fontSize: 12, margin: 0 }}>
+                Now {Number(v).toFixed(t.key === "rain" ? 1 : 0)}{t.unit} · pays out at {t.limit}{t.unit}
+              </p>
+              {simulate && (
+                <input
+                  type="range"
+                  min="0"
+                  max={t.max}
+                  step={t.key === "rain" ? 0.5 : 1}
+                  value={sim[t.key]}
+                  onChange={e => setSim({ ...sim, [t.key]: Number(e.target.value) })}
+                  style={{ width: "100%" }}
+                />
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 function Dashboard() {
 
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [pool, setPool] = useState(null);
-  const [position, setPosition] = useState([17.385, 78.4867]);
+
+  // GPS only: no saved city, no default position
+  const [position, setPosition] = useState(null);
+  const [gpsStatus, setGpsStatus] = useState("pending"); // "pending" | "ok" | "denied"
   const [place, setPlace] = useState("");
   const [accuracy, setAccuracy] = useState(null);
+  const [loadError, setLoadError] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [tick, setTick] = useState(0);
 
-  // true once the browser gave us a real GPS position
-  const gpsUsed = useRef(false);
-
-  const city = localStorage.getItem("city");
+  const gpsOk = gpsStatus === "ok";
 
   let userName = "";
   try {
@@ -729,8 +816,7 @@ function Dashboard() {
   const humidity = data?.weather?.humidity;
   const rainMm = data?.weather?.rain_mm ?? 0;
   const aqi = data?.aqi ?? 0;
-  const usingGps = data?.location_source === "gps";
-  const shownCity = (usingGps && place) || data?.city || city || "Your area";
+  const shownCity = gpsOk ? (place || "Your current location") : "Location needed";
   const forecast = data?.forecast || null;
   const next6 = forecast?.h6?.risk || "";
 
@@ -782,6 +868,9 @@ function Dashboard() {
     } else if (data?.outlook_risk === "HIGH") {
       nextPayout = "Payout ready";
       nextPayoutNote = "High risk ahead, pays on trigger";
+    } else if (!data) {
+      nextPayout = "Waiting for location";
+      nextPayoutNote = "Allow location to check conditions";
     } else {
       nextPayout = "No disruption";
       nextPayoutNote = pool.locked_until
@@ -822,27 +911,13 @@ function Dashboard() {
 
   const covered = PLAN_COVERS[pool?.plan] || [];
 
-  async function getCityCoordinates(cityName) {
-    try {
-      const res = await axios.get(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cityName)}`
-      );
-      if (res.data.length > 0) {
-        return [parseFloat(res.data[0].lat), parseFloat(res.data[0].lon)];
-      }
-    } catch (err) {
-      console.error("Location error:", err);
-    }
-    return [20.5937, 78.9629];
-  }
-
   // refresh every 5 minutes so rain shows up without a manual reload
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 5 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
 
-  // RISK: GPS first, saved city as fallback
+  // RISK: location comes from GPS only
   useEffect(() => {
     const token = localStorage.getItem("token");
 
@@ -857,6 +932,7 @@ function Dashboard() {
       try {
         const res = await axios.get(`${API_BASE}/risk/`, { headers, params });
         setData(res.data);
+        setLoadError(false);
         setUpdatedAt(new Date());
       } catch (err) {
         if (err.response?.status === 401) {
@@ -864,18 +940,13 @@ function Dashboard() {
           navigate("/login");
           return;
         }
-        if (params && params.lat !== undefined) {
-          load(city ? { city } : {});
-          return;
-        }
         console.error(err);
+        setLoadError(true);
       }
     }
 
-    const byCity = () => load(city ? { city } : {});
-
     if (!navigator.geolocation) {
-      byCity();
+      setGpsStatus("denied");
       return;
     }
 
@@ -883,8 +954,7 @@ function Dashboard() {
       pos => {
         const { latitude, longitude, accuracy: acc } = pos.coords;
 
-        gpsUsed.current = true;
-
+        setGpsStatus("ok");
         setPosition([latitude, longitude]);
         setAccuracy(acc);
 
@@ -911,33 +981,25 @@ function Dashboard() {
             });
           });
       },
-      () => byCity(),
+      () => {
+        setGpsStatus("denied");
+        setPosition(null);
+        setData(null);
+      },
       { timeout: 10000, enableHighAccuracy: true }
     );
-  }, [city, navigate, tick]);
+  }, [navigate, tick]);
 
   // POOL, PLAN, COVERAGE: real values (reload after risk so the GPS zone is saved)
   useEffect(() => {
     const token = localStorage.getItem("token");
-    if (!token || !data) return;
+    if (!token) return;
+    if (!data && gpsStatus !== "denied") return;
     axios
       .get(`${API_BASE}/pool/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => setPool(res.data))
       .catch(err => console.error("Pool load failed", err));
-  }, [data]);
-
-  // MAP: saved city only when GPS was not used
-  useEffect(() => {
-    const target = city || data?.city;
-
-    async function updateLocation() {
-      if (target) {
-        const coords = await getCityCoordinates(target);
-        if (!gpsUsed.current) setPosition(coords);
-      }
-    }
-    updateLocation();
-  }, [city, data?.city]);
+  }, [data, gpsStatus]);
 
   const riskKey = data?.risk || "LOW";
   const riskColor = RISK[riskKey] || RISK.LOW;
@@ -983,7 +1045,7 @@ function Dashboard() {
 
             <p className="zx-loc">
               <span className="zx-live-dot" />
-              {shownCity}
+              {gpsStatus === "pending" ? "Finding your location..." : shownCity}
             </p>
 
             <div className="zx-temp-row">
@@ -1017,6 +1079,25 @@ function Dashboard() {
           </div>
 
         </div>
+
+        {/* LOCATION OFF */}
+        {gpsStatus === "denied" && (
+          <div className="zx-banner zx-banner-warn zx-rise" style={{ "--i": 1 }}>
+            <span>📍</span>
+            <span>
+              Location access is off. ZensureX uses your device GPS only, so allow location in your browser,
+              then press Refresh now.
+            </span>
+          </div>
+        )}
+
+        {/* SERVER ERROR */}
+        {gpsOk && loadError && !data && (
+          <div className="zx-banner zx-banner-warn zx-rise" style={{ "--i": 1 }}>
+            <span>⏳</span>
+            <span>Could not load live conditions. The server may be waking up. Press Refresh now in a few seconds.</span>
+          </div>
+        )}
 
         {/* BANNER */}
         {data && (
@@ -1060,7 +1141,9 @@ function Dashboard() {
             </p>
             <p className="zx-kpi-value green">{pool ? <CountUp value={pool.balance} prefix="₹" /> : skel(90)}</p>
             <p className="zx-kpi-sub">
-              {pool ? `${pool.member_count} ${pool.member_count === 1 ? "member" : "members"} • ${pool.zone_label}` : "\u00a0"}
+              {pool
+                ? `${pool.member_count} ${pool.member_count === 1 ? "member" : "members"}${gpsOk && pool.zone_label ? ` • ${pool.zone_label}` : ""}`
+                : "\u00a0"}
             </p>
           </div>
 
@@ -1086,62 +1169,77 @@ function Dashboard() {
                 <div>
                   <h3 className="zx-card-title">Your location</h3>
                   <p className="zx-card-sub">
-                    {usingGps
+                    {gpsOk
                       ? `Exact GPS position${accuracy ? ` (accurate to about ${Math.round(accuracy)} m)` : ""}`
-                      : "Approximate position from your saved city. Allow location for an exact pin."}
+                      : gpsStatus === "denied"
+                      ? "Location is off. Allow location access to see your position."
+                      : "Finding your GPS position..."}
                   </p>
                 </div>
               </div>
 
-              <div className="zx-map-wrap">
-                <MapContainer
-                  center={position}
-                  key={position.toString()}
-                  zoom={usingGps ? 15 : 13}
-                  className="zx-map"
-                >
-                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              {gpsOk && position ? (
+                <div className="zx-map-wrap">
+                  <MapContainer
+                    center={position}
+                    key={position.toString()}
+                    zoom={15}
+                    className="zx-map"
+                  >
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
-                  {data?.risk && (
-                    <Circle
-                      center={position}
-                      radius={800}
-                      pathOptions={{ color: riskColor, fillColor: riskColor, fillOpacity: 0.2, weight: 2 }}
-                    />
-                  )}
+                    {data?.risk && (
+                      <Circle
+                        center={position}
+                        radius={800}
+                        pathOptions={{ color: riskColor, fillColor: riskColor, fillOpacity: 0.2, weight: 2 }}
+                      />
+                    )}
 
-                  {usingGps && accuracy && accuracy < 2000 && (
-                    <Circle
-                      center={position}
-                      radius={accuracy}
-                      pathOptions={{ color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.12, weight: 1 }}
-                    />
-                  )}
+                    {accuracy && accuracy < 2000 && (
+                      <Circle
+                        center={position}
+                        radius={accuracy}
+                        pathOptions={{ color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.12, weight: 1 }}
+                      />
+                    )}
 
-                  <Marker position={position} icon={makePin(riskColor)}>
-                    <Popup>
-                      <b>{usingGps ? "You are here" : "Saved city (approximate)"}</b>
-                      <br />
-                      Risk: {data?.risk || "Loading"}
-                    </Popup>
-                  </Marker>
-                </MapContainer>
+                    <Marker position={position} icon={makePin(riskColor)}>
+                      <Popup>
+                        <b>You are here</b>
+                        <br />
+                        Risk: {data?.risk || "Loading"}
+                      </Popup>
+                    </Marker>
+                  </MapContainer>
 
-                <div className="zx-legend">
-                  <div className="zx-legend-row">
-                    {["LOW", "MEDIUM", "HIGH"].map(k => (
-                      <span
-                        key={k}
-                        className="zx-legend-item"
-                        style={{ fontWeight: data?.risk === k ? 800 : 400 }}
-                      >
-                        <span className="zx-dot" style={{ background: RISK[k] }} />
-                        {k.charAt(0) + k.slice(1).toLowerCase()}
-                      </span>
-                    ))}
+                  <div className="zx-legend">
+                    <div className="zx-legend-row">
+                      {["LOW", "MEDIUM", "HIGH"].map(k => (
+                        <span
+                          key={k}
+                          className="zx-legend-item"
+                          style={{ fontWeight: data?.risk === k ? 800 : 400 }}
+                        >
+                          <span className="zx-dot" style={{ background: RISK[k] }} />
+                          {k.charAt(0) + k.slice(1).toLowerCase()}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : gpsStatus === "denied" ? (
+                <div className="zx-empty">
+                  <span className="zx-empty-icon">📍</span>
+                  <b>Location is off</b>
+                  <span className="zx-muted">
+                    Turn on location for this site in your browser settings, then press Refresh now.
+                  </span>
+                  <button className="zx-cta" onClick={() => setTick(t => t + 1)}>Try again</button>
+                </div>
+              ) : (
+                <div className="zx-empty"><span className="zx-skel" style={{ width: "100%", height: 200 }} /></div>
+              )}
             </div>
 
             {/* TREND */}
@@ -1226,8 +1324,11 @@ function Dashboard() {
               )}
             </div>
 
+            {/* PAYOUT TRIGGERS */}
+            <TriggerCard temp={temp} rainMm={rainMm} aqi={aqi} covered={covered} ready={!!data} />
+
             {/* PROTECTION SUMMARY */}
-            <div className="zx-card zx-rise" style={{ "--i": 10 }}>
+            <div className="zx-card zx-rise" style={{ "--i": 11 }}>
               <div className="zx-card-head">
                 <div>
                   <h3 className="zx-card-title">Protection summary</h3>
