@@ -64,3 +64,10 @@ def root():
 def add_place_column():
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS place VARCHAR"))
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+@app.head("/health")
+def health_head():
+    return {"ok": True}
