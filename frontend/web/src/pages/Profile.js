@@ -2,6 +2,7 @@ import { useState, useEffect, useContext } from "react";
 import axios from "axios";
 import { AppContext } from "../utils/AppContext";
 import PasswordModal from "../components/PasswordModal";
+import ProfilePlans from "../components/ProfilePlans"; // NEW
 import "../styles/zensurex-ui.css";
 
 const API = process.env.REACT_APP_API_URL || "https://zensurex-backend.onrender.com";
@@ -226,6 +227,9 @@ function Profile() {
             <p className="zx-kpi-sub">Used to size your cover</p>
           </div>
         </div>
+
+        {/* NEW: plan and payment history */}
+        <ProfilePlans />
 
         {/* FORM */}
         <div className="zx-card zx-rise" style={{ "--i": 4 }}>
