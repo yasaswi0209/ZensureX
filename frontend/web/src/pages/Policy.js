@@ -1,4 +1,3 @@
-
 import { useContext, useState, useEffect, useMemo, useRef } from "react";
 import { AppContext } from "../utils/AppContext";
 import { motion, AnimatePresence } from "framer-motion";
@@ -12,6 +11,26 @@ const RISK_COLOR = {
   MEDIUM: "#f59e0b",
   HIGH: "#ef4444",
 };
+
+// Simple one-time entrance for all cards
+const gridVariants = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.12 } },
+};
+
+const cardVariants = {
+  hidden: { opacity: 0, y: 30 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { type: "spring", stiffness: 120, damping: 16 },
+  },
+};
+
+function capitalize(text) {
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 function loadRazorpayScript() {
   return new Promise((resolve) => {
@@ -41,6 +60,72 @@ function loadRazorpayScript() {
     script.onerror = () => resolve(false);
     document.body.appendChild(script);
   });
+}
+
+// Compact animated circular gauge for a payout trigger
+function TriggerGauge({ icon, label, value, limit, unit, digits }) {
+  const hit = value > limit;
+  const ratio = Math.min(value / limit, 1);
+  const r = 26;
+  const c = 2 * Math.PI * r;
+
+  // Green when safe, amber only when close to the limit, red when triggered
+  const color = hit ? "#ef4444" : ratio >= 0.8 ? "#f59e0b" : "#22c55e";
+
+  return (
+    <div style={{ textAlign: "center", flex: 1, minWidth: 120 }}>
+      <svg width="76" height="76" viewBox="0 0 70 70">
+        <circle
+          cx="35"
+          cy="35"
+          r={r}
+          fill="none"
+          stroke="#e5e7eb"
+          strokeWidth="6"
+        />
+        <motion.circle
+          cx="35"
+          cy="35"
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="6"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          initial={{ strokeDashoffset: c }}
+          animate={{ strokeDashoffset: c * (1 - ratio) }}
+          transition={{ duration: 1, ease: "easeOut" }}
+          transform="rotate(-90 35 35)"
+        />
+        <text x="35" y="41" textAnchor="middle" fontSize="18">
+          {icon}
+        </text>
+      </svg>
+
+      <div style={{ fontWeight: 700, fontSize: 13, marginTop: 2 }}>
+        {label}
+      </div>
+
+      <div style={{ fontSize: 12, color: "#64748b" }}>
+        {Number(value).toFixed(digits)} / {limit} {unit}
+      </div>
+
+      <div
+        style={{
+          display: "inline-block",
+          marginTop: 4,
+          fontSize: 10,
+          fontWeight: 800,
+          color: hit ? "#b91c1c" : "#166534",
+          background: hit ? "#fee2e2" : "#dcfce7",
+          borderRadius: 999,
+          padding: "2px 8px",
+        }}
+      >
+        {hit ? "TRIGGERED" : "SAFE"}
+      </div>
+    </div>
+  );
 }
 
 function Policy() {
@@ -126,8 +211,7 @@ function Policy() {
       setLocationSource(data.location_source || "saved_city");
       setDataFallback(Boolean(data.data_fallback));
 
-      const severe =
-        rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
+      const severe = rm > 7.5 || t > 45 || a > 250 || data.risk === "HIGH";
 
       if (severe && !data.data_fallback && !claimFired.current) {
         claimFired.current = true;
@@ -260,12 +344,14 @@ function Policy() {
         name: "Basic",
         price: base,
         desc: "Low risk coverage",
+        covers: ["rain"],
         features: ["Rain protection", "Low demand cover", "UPI payout"],
       },
       {
         name: "Moderate",
         price: moderate,
         desc: "Balanced coverage",
+        covers: ["rain", "pollution"],
         features: [
           "Rain protection",
           "Pollution cover",
@@ -277,6 +363,7 @@ function Policy() {
         name: "Premium",
         price: premium,
         desc: "Full AI protection",
+        covers: ["rain", "heat", "pollution"],
         features: [
           "Rain + heat cover",
           "Accident protection",
@@ -484,11 +571,12 @@ function Policy() {
     },
   ];
 
-  function triggerColor(ratio) {
-    if (ratio >= 1) return "#ef4444";
-    if (ratio >= 0.5) return "#f59e0b";
-    return "#22c55e";
-  }
+  // Would the user's active plan pay out for anything triggered right now?
+  const myPlanData = plans.find((p) => p.name === plan);
+  const triggeredNow = payoutTriggers.filter((t) => t.value > t.limit);
+  const coveredTriggered = myPlanData
+    ? triggeredNow.filter((t) => myPlanData.covers.includes(t.key))
+    : [];
 
   return (
     <section className="scene active">
@@ -504,8 +592,7 @@ function Policy() {
                 top: 0,
                 left: "50%",
                 transform: "translateX(-50%)",
-                background:
-                  toast.type === "success" ? "#22c55e" : "#ef4444",
+                background: toast.type === "success" ? "#22c55e" : "#ef4444",
                 color: "white",
                 padding: "12px 20px",
                 borderRadius: "10px",
@@ -542,74 +629,189 @@ function Policy() {
         )}
 
         {/* PLAN CARDS */}
-        <div className="pricing-grid">
+        <motion.div
+          className="pricing-grid"
+          variants={gridVariants}
+          initial="hidden"
+          animate="show"
+        >
           {plans.map((p) => {
             const active = selectedPlan?.name === p.name;
             const isRecommended = !isLocked && recommendedPlan === p.name;
             const isMine = isLocked && plan === p.name;
 
             return (
+              // Outer wrapper handles the one-time entrance animation
               <motion.div
                 key={p.name}
-                className={`price-card ${active ? "active glow" : ""} ${
-                  isRecommended ? "highlight" : ""
-                } ${isLocked ? "glow-locked" : ""}`}
-                style={isLocked && !isMine ? { opacity: 0.5 } : undefined}
-                whileHover={{ scale: isLocked ? 1 : 1.05 }}
-                onClick={() => {
-                  if (!isLocked && !paymentLoading) setSelectedPlan(p);
-                }}
+                variants={cardVariants}
+                style={{ height: "100%" }}
               >
-                {isRecommended && <div className="badge">Recommended</div>}
-
-                <h2>{p.name}</h2>
-                <h1>
-                  ₹{p.price}
-                  <span>/week</span>
-                </h1>
-
-                <p className="muted">{p.desc}</p>
-
-                <ul>
-                  {p.features.map((feature) => (
-                    <li key={feature}>✔ {feature}</li>
-                  ))}
-                </ul>
-
-                <button
-                  className="btn"
-                  disabled={active || isLocked || paymentLoading}
-                  onClick={(event) => {
-                    event.stopPropagation();
+                {/* Inner card handles the recommended-plan animation */}
+                <motion.div
+                  className={`price-card ${active ? "active glow" : ""} ${
+                    isRecommended ? "highlight" : ""
+                  } ${isLocked ? "glow-locked" : ""}`}
+                  style={{
+                    position: "relative",
+                    height: "100%",
+                    ...(isLocked && !isMine ? { opacity: 0.5 } : {}),
+                  }}
+                  animate={
+                    isRecommended
+                      ? {
+                          y: [0, -8, 0],
+                          boxShadow: [
+                            "0 0 0 2px rgba(79,70,229,.9), 0 10px 30px rgba(79,70,229,.20)",
+                            "0 0 0 3px rgba(129,140,248,1), 0 18px 55px rgba(79,70,229,.50)",
+                            "0 0 0 2px rgba(79,70,229,.9), 0 10px 30px rgba(79,70,229,.20)",
+                          ],
+                        }
+                      : { y: 0 }
+                  }
+                  transition={
+                    isRecommended
+                      ? { duration: 2.8, repeat: Infinity, ease: "easeInOut" }
+                      : { duration: 0.3 }
+                  }
+                  whileHover={
+                    isLocked ? {} : { scale: isRecommended ? 1.04 : 1.03 }
+                  }
+                  whileTap={isLocked ? {} : { scale: 0.98 }}
+                  onClick={() => {
                     if (!isLocked && !paymentLoading) setSelectedPlan(p);
                   }}
                 >
-                  {isLocked
-                    ? isMine
-                      ? "Your plan 🔒"
-                      : "Unavailable"
-                    : active
-                    ? "Selected"
-                    : "Select Plan"}
-                </button>
+                  {/* Shimmer sweep (recommended only) */}
+                  {isRecommended && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        overflow: "hidden",
+                        borderRadius: "inherit",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <motion.div
+                        initial={{ x: "-130%" }}
+                        animate={{ x: "380%" }}
+                        transition={{
+                          duration: 1.6,
+                          repeat: Infinity,
+                          repeatDelay: 2.2,
+                          ease: "easeInOut",
+                        }}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "35%",
+                          height: "100%",
+                          background:
+                            "linear-gradient(105deg, transparent, rgba(255,255,255,.65), transparent)",
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {/* Floating badge (recommended only) */}
+                  {isRecommended && (
+                    <motion.div
+                      className="badge"
+                      animate={{ y: [0, -4, 0], scale: [1, 1.06, 1] }}
+                      transition={{
+                        repeat: Infinity,
+                        duration: 1.8,
+                        ease: "easeInOut",
+                      }}
+                    >
+                      ⭐ Recommended for you
+                    </motion.div>
+                  )}
+
+                  <h2>{p.name}</h2>
+
+                  <h1>
+                    ₹{p.price}
+                    <span>/week</span>
+                  </h1>
+
+                  <p className="muted">{p.desc}</p>
+
+                  <ul>
+                    {p.features.map((feature) => (
+                      <li key={feature}>✔ {feature}</li>
+                    ))}
+                  </ul>
+
+                  {/* Which triggers this plan covers */}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      justifyContent: "center",
+                      flexWrap: "wrap",
+                      margin: "10px 0",
+                    }}
+                  >
+                    {payoutTriggers.map((t) => {
+                      const covered = p.covers.includes(t.key);
+
+                      return (
+                        <span
+                          key={t.key}
+                          title={t.label}
+                          style={{
+                            opacity: covered ? 1 : 0.25,
+                            filter: covered ? "none" : "grayscale(1)",
+                            fontSize: 12,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            background: "#f1f5f9",
+                          }}
+                        >
+                          {t.icon} {covered ? "Covered" : "—"}
+                        </span>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    className="btn"
+                    disabled={active || isLocked || paymentLoading}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!isLocked && !paymentLoading) setSelectedPlan(p);
+                    }}
+                  >
+                    {isLocked
+                      ? isMine
+                        ? "Your plan 🔒"
+                        : "Unavailable"
+                      : active
+                      ? "Selected"
+                      : "Select Plan"}
+                  </button>
+                </motion.div>
               </motion.div>
             );
           })}
-        </div>
+        </motion.div>
 
         {/* LIVE PAYOUT TRIGGERS */}
         <div
           style={{
             maxWidth: "900px",
             margin: "28px auto 0",
-            padding: "22px",
+            padding: "20px 22px",
             background: "#fff",
             border: "1px solid #e5e7eb",
             borderRadius: "18px",
             boxShadow: "0 8px 28px rgba(15,23,42,.05)",
           }}
         >
-          <h2 style={{ margin: "0 0 6px", fontSize: "20px" }}>
+          <h2 style={{ margin: "0 0 6px", fontSize: "18px" }}>
             Live Payout Triggers
           </h2>
 
@@ -617,81 +819,51 @@ function Policy() {
             style={{
               color: "#64748b",
               fontSize: "13px",
-              margin: "0 0 20px",
+              margin: "0 0 18px",
             }}
           >
-            Current conditions for {city || "your saved city"}. A trigger is
-            reached only when the current value exceeds its policy threshold.
+            Current conditions for {capitalize(city) || "your saved city"}. A
+            trigger is reached only when the current value exceeds its policy
+            threshold.
           </p>
 
-          {payoutTriggers.map((item) => {
-            const ratio = item.limit ? item.value / item.limit : 0;
-            const hit = item.value > item.limit;
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              flexWrap: "wrap",
+              justifyContent: "space-around",
+            }}
+          >
+            {payoutTriggers.map((t) => (
+              <TriggerGauge key={t.key} {...t} />
+            ))}
+          </div>
 
-            return (
-              <div key={item.key} style={{ marginBottom: "18px" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: "12px",
-                    flexWrap: "wrap",
-                    marginBottom: "8px",
-                    fontSize: "14px",
-                  }}
-                >
-                  <span>
-                    {item.icon} <b>{item.label}</b>
-                  </span>
-
-                  <span>
-                    <b>{Number(item.value).toFixed(item.digits)}</b> /{" "}
-                    {item.limit} {item.unit}
-                    <span
-                      style={{
-                        marginLeft: "9px",
-                        fontSize: "11px",
-                        fontWeight: 800,
-                        color: hit ? "#b91c1c" : "#166534",
-                        background: hit ? "#fee2e2" : "#dcfce7",
-                        borderRadius: "999px",
-                        padding: "3px 8px",
-                      }}
-                    >
-                      {hit ? "TRIGGERED" : "NOT TRIGGERED"}
-                    </span>
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    width: "100%",
-                    height: "8px",
-                    background: "#e5e7eb",
-                    borderRadius: "999px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${Math.min(100, ratio * 100)}%`,
-                      height: "100%",
-                      borderRadius: "999px",
-                      background: triggerColor(ratio),
-                      transition: "width .5s ease",
-                    }}
-                  />
-                </div>
-              </div>
-            );
-          })}
+          {isLocked && myPlanData && (
+            <p
+              style={{
+                margin: "16px 0 0",
+                fontSize: "13px",
+                textAlign: "center",
+                color: coveredTriggered.length ? "#166534" : "#64748b",
+                fontWeight: 600,
+              }}
+            >
+              {coveredTriggered.length
+                ? `✅ Your ${plan} plan covers ${coveredTriggered
+                    .map((t) => t.label.toLowerCase())
+                    .join(", ")} right now.`
+                : `Your ${plan} plan is active. No covered trigger is reached right now.`}
+            </p>
+          )}
 
           <p
             style={{
-              margin: "8px 0 0",
+              margin: "14px 0 0",
               fontSize: "13px",
               color: "#64748b",
+              textAlign: "center",
             }}
           >
             Overall risk:{" "}
