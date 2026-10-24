@@ -19,6 +19,7 @@ ZensureX pays gig workers (Swiggy, Zomato, Uber, Rapido, Zepto and others) autom
 - **Safe retries.** A payment is credited to the pool only once, even if verification is retried.
 - **Profile page** showing the current plan, price, cover, active-until date and the last 10 verified payments with Razorpay payment IDs.
 - **Dashboard** with weather, risk, recent claims and pool summary.
+- **Weather animations.** Every temperature range has its own animated scene, so the dashboard looks and feels like the weather outside (see [Weather animations](#weather-animations)).
 
 ---
 
@@ -30,6 +31,21 @@ ZensureX pays gig workers (Swiggy, Zomato, Uber, Rapido, Zepto and others) autom
 | Backend | Python, FastAPI, SQLAlchemy, hosted on Render |
 | Payments | Razorpay Orders and Checkout |
 | Data | Weather and AQI API (`app/utils/weather_api.py`), premium model (`app/ml/premium_model.py`) |
+
+---
+
+## Weather animations
+
+The dashboard reacts to the live weather for the worker's city. Every temperature range has its own animation, so a hot afternoon, a mild day and a cold morning each look different at a glance. The animation changes automatically when the temperature from `/claims/weather/{city}` moves into a new range.
+
+| Temperature range | Animation |
+|-------------------|-----------|
+| _Fill in your first range, e.g. below 20 °C_ | _Describe it, e.g. cool breeze_ |
+| _Next range_ | _Describe it_ |
+| _Next range_ | _Describe it_ |
+| _Heatwave range (40 °C and above)_ | _Describe it, e.g. glowing sun and heat haze_ |
+
+Replace the rows above with the exact ranges and animations used in your code, and add the component file name (for example `src/components/WeatherScene.jsx`) so contributors know where to edit them.
 
 ---
 
