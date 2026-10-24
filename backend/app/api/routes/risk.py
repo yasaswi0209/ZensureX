@@ -8,9 +8,17 @@ from app.models.user import User
 from app.api.deps import get_current_user
 from app.ml.premium_model import calculate_premium
 from app.services import zone_pool
+from app.services.risk_engine import (
+    assess,
+    worst,
+    cached,
+    get_conditions,
+    LEVELS,
+    PLAN_FOR_LEVEL,
+    STORM_IDS,
+    CACHE_TTL,
+)
 from app.utils.weather_api import (
-    get_weather_data,
-    get_aqi_data,
     get_weather_by_coords,
     get_aqi_by_coords,
     get_forecast_by_coords,
@@ -25,53 +33,6 @@ DEMO_SCENARIO = "HIGH"   # LOW / MEDIUM / HIGH
 
 # TEST ONLY: fakes a thunderstorm for every user. Keep False in production.
 TEST_STORM = False
-
-LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
-LEVEL_NAMES = ["LOW", "MEDIUM", "HIGH"]
-PLAN_FOR_LEVEL = {"LOW": "Basic", "MEDIUM": "Moderate", "HIGH": "Premium"}
-
-# OpenWeather condition codes
-# 2xx = thunderstorm, 5xx = rain
-STORM_IDS = range(200, 233)                         # 200-232
-WET_IDS = (501, 502, 503, 504, 511, 521, 522, 531)  # moderate rain and heavier
-
-# Temperature limits (°C)
-HOT_MEDIUM = 35
-HOT_HIGH = 40
-COLD_MEDIUM = 15    # below this = MEDIUM
-COLD_HIGH = 5       # below this = HIGH
-
-
-def live_level(temp, rain_mm, cond_id=800, pop=0):
-    """Calculate weather risk level from rain, storm, temperature, and precipitation probability."""
-    cond_id = cond_id or 800
-    level = "LOW"
-
-    # MEDIUM (orange)
-    if (
-        rain_mm > 2.5
-        or temp > HOT_MEDIUM
-        or temp < COLD_MEDIUM
-        or cond_id in WET_IDS
-        or (pop or 0) >= 60
-    ):
-        level = "MEDIUM"
-
-    # HIGH (red) - keep existing conditions unchanged
-    if (
-        rain_mm > 7.5
-        or temp > HOT_HIGH
-        or temp < COLD_HIGH
-        or (rain_mm > 2.5 and temp > HOT_MEDIUM)
-        or cond_id in STORM_IDS
-    ):
-        level = "HIGH"
-
-    return level
-
-
-def worst(*levels):
-    return LEVEL_NAMES[max(LEVELS.get(l, 0) for l in levels)]
 
 
 def slot_note(label, slot):
@@ -111,17 +72,30 @@ def get_risk(
     pricing_city = "Hyderabad" if DEMO_MODE else saved_city
     display_city = city or pricing_city
 
-    # Live data and forecast: GPS if given, else city
+    # One cached fetch for the saved (pricing) city
+    pricing_weather, pricing_aqi = get_conditions(pricing_city)
+
+    # Display data: GPS if given, else reuse the cached city data
     if used_gps:
         weather = get_weather_by_coords(lat, lon)
         aqi = get_aqi_by_coords(lat, lon)
         forecast = get_forecast_by_coords(lat, lon)
     else:
-        weather = get_weather_data(display_city)
-        aqi = get_aqi_data(display_city)
-        forecast = get_forecast_by_city(display_city)
+        if display_city == pricing_city:
+            weather, aqi = dict(pricing_weather), pricing_aqi
+        else:
+            weather, aqi = get_conditions(display_city)
+        forecast = cached(
+            f"forecast:{display_city}",
+            CACHE_TTL,
+            lambda: get_forecast_by_city(display_city),
+        )
 
-    # Demo override
+    # Work on copies so demo/test edits never touch the cache
+    weather = dict(weather or {})
+    pricing_weather = dict(pricing_weather or {})
+
+    # Demo override (affects both the display and the price)
     if DEMO_MODE:
         if DEMO_SCENARIO == "LOW":
             weather.update(temp=28, rain=0, rain_mm=0, condition="Clear", condition_id=800)
@@ -140,100 +114,77 @@ def get_risk(
         }
         forecast = {"h3": dict(demo_slot), "h6": dict(demo_slot)}
 
+        # Make the price follow the demo scenario too
+        pricing_weather = dict(weather)
+        pricing_aqi = aqi
+
     # TEST ONLY: fake thunderstorm (turn on with TEST_STORM = True)
     if TEST_STORM:
-        weather["condition_id"] = 211
-        weather["condition"] = "Thunderstorm"
-        weather["description"] = "thunderstorm"
-        weather["rain"] = 1
+        for w in (weather, pricing_weather):
+            w["condition_id"] = 211
+            w["condition"] = "Thunderstorm"
+            w["description"] = "thunderstorm"
+            w["rain"] = 1
 
-    temp = weather.get("temp", 30)
-    rain_mm = weather.get("rain_mm", 0) or 0   # mm per hour
-    cond_id = weather.get("condition_id", 800)
-
-    explanation = []
-
-    if temp > HOT_HIGH:
-        explanation.append("Extreme heat (>40°C) increases fatigue risk")
-    elif temp > HOT_MEDIUM:
-        explanation.append("High temperature affects worker performance")
-    elif temp < COLD_HIGH:
-        explanation.append("Very cold weather (<5°C) is risky for riders")
-    elif temp < COLD_MEDIUM:
-        explanation.append("Low temperature (<15°C) may affect riding conditions")
-    else:
-        explanation.append("Temperature is within safe range")
-
-    if cond_id in STORM_IDS:
-        explanation.append("Thunderstorm detected, risk of sudden heavy rain and lightning")
-    elif rain_mm > 7.5:
-        explanation.append("Heavy rain (>7.5 mm/h) raises delay and accident risk")
-    elif rain_mm > 2.5:
-        explanation.append("Moderate rain (>2.5 mm/h) may cause delays")
-    elif cond_id in WET_IDS or rain_mm > 0:
-        explanation.append("Rain in the area, may cause minor delays")
-    else:
-        explanation.append("No significant rainfall right now")
-
-    # AQI is shown for information only and does not change the risk level
-    explanation.append(f"Air quality index {aqi} (not used for risk)")
-
-    # ML core (priced on saved city)
-    premium_data = calculate_premium(pricing_city)
+    # Price is built from the saved city, using the same single risk function
+    premium_data = calculate_premium(pricing_city, pricing_weather, pricing_aqi)
     ml_price = premium_data["premium"]
     risk = premium_data["risk_level"]
 
-    # Live conditions set a minimum level; ML can only raise it
-    live = live_level(temp, rain_mm, cond_id)
-    if LEVELS[live] > LEVELS.get(risk, 0):
-        risk = live
-
-    # Forecast risk for the next 3h and 6h (rain, storm and temperature only)
+    # Forecast risk for the next 3h and 6h (same function, AQI not forecast)
     forecast_out = None
     outlook_notes = []
     if forecast:
         forecast_out = {}
         for key, label in (("h3", "Next 3h"), ("h6", "Next 6h")):
             slot = dict(forecast[key])
-            slot["risk"] = live_level(
-                slot["temp"], slot["rain_mm"], slot.get("condition_id", 800)
-            )
+            slot["risk"] = assess(
+                slot["temp"],
+                slot["rain_mm"],
+                slot.get("condition_id", 800),
+                0,
+                slot.get("pop", 0),
+            )["level"]
             forecast_out[key] = slot
             outlook_notes.append(slot_note(label, slot))
 
-    # Outlook = worst of now, +3h and +6h. Plan recommendation and price follow it.
+    # Outlook = worst of now, +3h and +6h
     outlook_risk = risk
     if forecast_out:
-        outlook_risk = worst(risk, forecast_out["h3"]["risk"], forecast_out["h6"]["risk"])
+        outlook_risk = worst(
+            risk, forecast_out["h3"]["risk"], forecast_out["h6"]["risk"]
+        )
 
-    # If the forecast is worse than now, price goes up 10% per level
-    steps = max(0, LEVELS[outlook_risk] - LEVELS.get(risk, 0))
+    # Forecast worse than now: price rises 10% per level
+    steps = max(0, LEVELS[outlook_risk] - LEVELS[risk])
     price = round(ml_price * (1 + 0.10 * steps))
-
     recommended_plan = PLAN_FOR_LEVEL[outlook_risk]
 
-    if outlook_risk == "HIGH":
-        explanation.append("High risk ahead → higher premium 🔴")
-    elif outlook_risk == "MEDIUM":
-        explanation.append("Moderate risk ahead → balanced pricing 🟡")
-    else:
-        explanation.append("Low risk ahead → lower premium 🟢")
+    reason = (
+        " | ".join(f["label"] for f in premium_data["breakdown"])
+        or "Normal conditions"
+    )
 
     return {
         "city": display_city,
+        "pricing_city": pricing_city,
         "location_source": "gps" if used_gps else "saved_city",
         "zone": zone_pool.zone_of_user(db_user),
         "risk": risk,
+        "risk_points": premium_data["risk_points"],
+        "breakdown": premium_data["breakdown"],
+        "band": premium_data["band"],
         "weather": weather,
         "aqi": aqi,
         "ml_price": ml_price,
         "price": price,
-        "forecast": forecast_out,                  # None if forecast unavailable
+        "price_uplift_pct": steps * 10,
+        "forecast": forecast_out,
         "forecast_available": forecast_out is not None,
         "outlook_risk": outlook_risk,
         "outlook_notes": outlook_notes,
         "recommended_plan": recommended_plan,
-        "reason": " | ".join(explanation),
+        "reason": reason,
         "recommendation": f"{recommended_plan} Plan Recommended",
         "data_fallback": bool(weather.get("fallback")),
     }
