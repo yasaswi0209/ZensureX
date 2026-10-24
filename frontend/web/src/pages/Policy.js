@@ -545,7 +545,7 @@ function Policy() {
     {
       key: "rain",
       icon: "🌧️",
-      label: "Heavy rain",
+      label: "Rain",
       value: rainMm,
       limit: 7.5,
       unit: "mm/h",
@@ -554,7 +554,7 @@ function Policy() {
     {
       key: "heat",
       icon: "🔥",
-      label: "Extreme heat",
+      label: "Heat",
       value: temp,
       limit: 45,
       unit: "°C",
@@ -563,7 +563,7 @@ function Policy() {
     {
       key: "pollution",
       icon: "🌫️",
-      label: "High pollution",
+      label: "Pollution",
       value: aqi,
       limit: 250,
       unit: "AQI",
