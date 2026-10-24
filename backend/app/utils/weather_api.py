@@ -16,7 +16,15 @@ TIMEOUT = 8
 
 def _fallback():
     # "fallback": True lets the caller know real data was not available
-    return {"rain": 0, "rain_mm": 0, "temp": 30, "humidity": 50, "fallback": True}
+    return {
+        "rain": 0,
+        "rain_mm": 0,
+        "temp": 30,
+        "humidity": 50,
+        "condition": "",
+        "condition_id": 800,
+        "fallback": True,
+    }
 
 
 def _parse_current(res: dict):
@@ -25,8 +33,10 @@ def _parse_current(res: dict):
         print("Weather lookup failed:", res)
         return _fallback()
 
-    condition = (res.get("weather") or [{}])[0].get("main", "")
-    rain_mm = res.get("rain", {}).get("1h", 0) or 0
+    w0 = (res.get("weather") or [{}])[0]
+    condition = w0.get("main", "")
+    cond_id = w0.get("id", 800)
+    rain_mm = (res.get("rain") or {}).get("1h", 0) or 0
     rain = 1 if (rain_mm > 0 or condition in RAIN_CONDITIONS) else 0
 
     return {
@@ -34,6 +44,9 @@ def _parse_current(res: dict):
         "rain_mm": rain_mm,
         "temp": res["main"]["temp"],
         "humidity": res["main"]["humidity"],
+        "condition": condition,          # e.g. "Rain", "Thunderstorm"
+        "condition_id": cond_id,         # e.g. 501, 211
+        "description": w0.get("description", ""),
     }
 
 
@@ -112,8 +125,9 @@ def get_weather_forecast(city: str):
             return _fallback()
 
         nxt = res["list"][1]
-        condition = (nxt.get("weather") or [{}])[0].get("main", "")
-        rain_mm = nxt.get("rain", {}).get("3h", 0) or 0
+        w0 = (nxt.get("weather") or [{}])[0]
+        condition = w0.get("main", "")
+        rain_mm = (nxt.get("rain") or {}).get("3h", 0) or 0
         rain = 1 if (rain_mm > 0 or condition in RAIN_CONDITIONS) else 0
 
         return {
@@ -121,6 +135,8 @@ def get_weather_forecast(city: str):
             "humidity": nxt["main"]["humidity"],
             "rain": rain,
             "rain_mm": rain_mm,
+            "condition": condition,
+            "condition_id": w0.get("id", 800),
         }
     except Exception as e:
         print("Forecast API error:", e)
@@ -142,7 +158,8 @@ def _parse_forecast(res: dict):
 
     slots = []
     for item in items[:2]:
-        condition = (item.get("weather") or [{}])[0].get("main", "")
+        w0 = (item.get("weather") or [{}])[0]
+        condition = w0.get("main", "")
         rain_3h = (item.get("rain") or {}).get("3h", 0) or 0
         rain_mm = round(rain_3h / 3, 2)
         rain = 1 if (rain_mm > 0 or condition in RAIN_CONDITIONS) else 0
@@ -154,6 +171,8 @@ def _parse_forecast(res: dict):
             "rain_mm": rain_mm,
             "pop": round((item.get("pop") or 0) * 100),   # rain chance in %
             "dt": item.get("dt"),                          # unix time of the slot
+            "condition": condition,
+            "condition_id": w0.get("id", 800),
         })
 
     return {"h3": slots[0], "h6": slots[1]}
