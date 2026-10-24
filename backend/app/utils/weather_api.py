@@ -59,6 +59,93 @@ def _parse_current(res: dict):
 
 # ---------------------------------------------------------------- weather ---
 
+def _wmo_text(code):
+    """Open-Meteo (WMO) weather code -> short description for the dashboard chip."""
+    code = int(code or 0)
+    if code in (95, 96, 99):
+        return "thunderstorm"
+    if code in (65, 82):
+        return "heavy rain"
+    if code in (63, 81):
+        return "moderate rain"
+    if code in (61, 80):
+        return "light rain"
+    if code in (51, 53, 55, 56, 57):
+        return "drizzle"
+    if code in (66, 67):
+        return "freezing rain"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "snow"
+    if code in (45, 48):
+        return "fog"
+    if code in (1, 2):
+        return "partly cloudy"
+    if code == 3:
+        return "overcast clouds"
+    return "clear sky"
+
+
+def _open_meteo_current(lat: float, lon: float):
+    """Current weather from Open-Meteo, used to double-check OpenWeather. None on failure."""
+    try:
+        res = requests.get(
+            OM_FORECAST_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code",
+                "timezone": "auto",
+            },
+            timeout=TIMEOUT,
+        ).json()
+        c = res["current"]
+        cid, cname = _wmo_to_owm(c.get("weather_code"))
+        return {
+            "temp": c["temperature_2m"],
+            "humidity": c.get("relative_humidity_2m"),
+            "rain_mm": float(c.get("precipitation") or 0),
+            "condition": cname,
+            "condition_id": cid,
+            "description": _wmo_text(c.get("weather_code")),
+        }
+    except Exception as e:
+        print("Open-Meteo current error:", e)
+        return None
+
+
+def _merge_current(ow: dict, om):
+    """OpenWeather stays the base. If Open-Meteo sees rain or a storm that it missed, use it."""
+    if not om:
+        return ow
+
+    om_wet = om["condition"] in RAIN_CONDITIONS or om["rain_mm"] > 0
+    om_storm = 200 <= om["condition_id"] <= 232
+
+    # OpenWeather was down: use Open-Meteo completely
+    if ow.get("fallback"):
+        return {
+            "rain": 1 if om_wet else 0,
+            "rain_mm": om["rain_mm"],
+            "temp": om["temp"],
+            "humidity": om["humidity"] if om["humidity"] is not None else 50,
+            "condition": om["condition"],
+            "condition_id": om["condition_id"],
+            "description": om["description"],
+        }
+
+    ow_wet = ow.get("rain") == 1
+    ow_storm = 200 <= (ow.get("condition_id") or 800) <= 232
+
+    if (om_storm and not ow_storm) or (om_wet and not ow_wet):
+        ow["condition"] = om["condition"]
+        ow["condition_id"] = om["condition_id"]
+        ow["description"] = om["description"]
+
+    ow["rain_mm"] = max(ow.get("rain_mm") or 0, om["rain_mm"])
+    ow["rain"] = 1 if (ow_wet or om_wet) else 0
+    return ow
+
+
 def get_weather_data(city: str):
     """Current weather by city name."""
     try:
@@ -67,11 +154,14 @@ def get_weather_data(city: str):
             params={"q": f"{city},IN", "appid": WEATHER_API_KEY, "units": "metric"},
             timeout=TIMEOUT,
         ).json()
+        ow = _parse_current(res)
     except Exception as e:
         print("Weather API error:", e)
-        return _fallback()
+        ow = _fallback()
 
-    return _parse_current(res)
+    coords = _geocode_city(city)
+    om = _open_meteo_current(coords[0], coords[1]) if coords else None
+    return _merge_current(ow, om)
 
 
 def get_weather_by_coords(lat: float, lon: float):
@@ -82,11 +172,12 @@ def get_weather_by_coords(lat: float, lon: float):
             params={"lat": lat, "lon": lon, "appid": WEATHER_API_KEY, "units": "metric"},
             timeout=TIMEOUT,
         ).json()
+        ow = _parse_current(res)
     except Exception as e:
         print("Weather API (coords) error:", e)
-        return _fallback()
+        ow = _fallback()
 
-    return _parse_current(res)
+    return _merge_current(ow, _open_meteo_current(lat, lon))
 
 
 # -------------------------------------------------------------------- AQI ---
@@ -355,4 +446,4 @@ def get_forecast_by_city(city: str):
         data = _open_meteo_forecast(coords[0], coords[1])
         if data:
             return data
-    return _owm_forecast_by_city(city)
+    return _owm_forecast_by_coords(*coords) if False else _owm_forecast_by_city(city)
