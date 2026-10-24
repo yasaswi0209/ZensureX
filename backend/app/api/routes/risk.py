@@ -42,8 +42,8 @@ COLD_MEDIUM = 15    # below this = MEDIUM
 COLD_HIGH = 5       # below this = HIGH
 
 
-def live_level(temp, rain_mm, cond_id=800):
-    """Minimum risk level from rain, storm and temperature only. AQI is not used."""
+def live_level(temp, rain_mm, cond_id=800, pop=0):
+    """Calculate weather risk level from rain, storm, temperature, and precipitation probability."""
     cond_id = cond_id or 800
     level = "LOW"
 
@@ -53,16 +53,17 @@ def live_level(temp, rain_mm, cond_id=800):
         or temp > HOT_MEDIUM
         or temp < COLD_MEDIUM
         or cond_id in WET_IDS
+        or (pop or 0) >= 60
     ):
         level = "MEDIUM"
 
-    # HIGH (red)
+    # HIGH (red) - keep existing conditions unchanged
     if (
         rain_mm > 7.5
         or temp > HOT_HIGH
         or temp < COLD_HIGH
         or (rain_mm > 2.5 and temp > HOT_MEDIUM)
-        or cond_id in STORM_IDS               # thunderstorm, even with 0 mm rain
+        or cond_id in STORM_IDS
     ):
         level = "HIGH"
 
