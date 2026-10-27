@@ -6,7 +6,9 @@ import axios from "axios";
 
 const API_BASE = "https://zensurex-backend.onrender.com";
 
-// Simple one-time entrance for all cards
+// Plan order, used to allow upgrades only
+const PLAN_RANK = { Basic: 1, Moderate: 2, Premium: 3 };
+
 const gridVariants = {
   hidden: {},
   show: { transition: { staggerChildren: 0.12 } },
@@ -38,21 +40,14 @@ function loadRazorpayScript() {
       resolve(true);
       return;
     }
-
     const existingScript = document.querySelector(
       'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
     );
-
     if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(true), {
-        once: true,
-      });
-      existingScript.addEventListener("error", () => resolve(false), {
-        once: true,
-      });
+      existingScript.addEventListener("load", () => resolve(true), { once: true });
+      existingScript.addEventListener("error", () => resolve(false), { once: true });
       return;
     }
-
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
     script.async = true;
@@ -79,7 +74,6 @@ function Policy() {
   const [dataFallback, setDataFallback] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Pricing explanation data from the backend
   const [breakdown, setBreakdown] = useState([]);
   const [band, setBand] = useState([20, 52]);
   const [upliftPct, setUpliftPct] = useState(0);
@@ -90,7 +84,6 @@ function Policy() {
   const [countdown, setCountdown] = useState("");
   const [lockDate, setLockDate] = useState(null);
 
-  // Toast and payment state
   const [toast, setToast] = useState(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const paymentInProgress = useRef(false);
@@ -101,17 +94,14 @@ function Policy() {
     setTimeout(() => setToast(null), 3500);
   }
 
-  // Automatic claim trigger
   async function autoTriggerClaim(reasonText) {
     try {
       const token = localStorage.getItem("token");
-
       const res = await axios.post(
         `${API_BASE}/claims/auto`,
         { reason: reasonText || "Severe weather conditions" },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-
       showToast(`💰 Auto Claim Approved ₹${res.data.amount}`, "success");
     } catch (err) {
       console.error("Auto claim failed", err);
@@ -155,15 +145,9 @@ function Policy() {
       setBand(data.band || [20, 52]);
       setUpliftPct(data.price_uplift_pct || 0);
 
-      // Claims use only the payout thresholds, not the pricing risk level
       const severe = rm > 7.5 || t > 45 || a > 250;
 
-      if (
-        severe &&
-        !data.data_fallback &&
-        !fromCache &&
-        !claimFired.current
-      ) {
+      if (severe && !data.data_fallback && !fromCache && !claimFired.current) {
         claimFired.current = true;
         autoTriggerClaim(data.reason);
       }
@@ -173,12 +157,8 @@ function Policy() {
 
     async function load(params, isGps = false) {
       try {
-        const res = await axios.get(`${API_BASE}/risk/`, {
-          headers,
-          params,
-        });
+        const res = await axios.get(`${API_BASE}/risk/`, { headers, params });
 
-        // If the GPS result already arrived, ignore the slower saved-city one
         if (!isGps && gpsApplied) return;
         if (isGps) gpsApplied = true;
 
@@ -190,8 +170,6 @@ function Policy() {
           navigate("/login");
           return;
         }
-
-        // GPS request failed: the saved-city data is already loading
         if (isGps) return;
 
         setLoading(false);
@@ -200,16 +178,13 @@ function Policy() {
       }
     }
 
-    // 1. Instant paint from the last visit
     try {
       const cached = sessionStorage.getItem("riskData");
       if (cached) applyData(JSON.parse(cached), true);
     } catch {}
 
-    // 2. Fetch immediately with the saved city (no waiting for GPS)
     load({});
 
-    // 3. Refine with GPS in the background
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) =>
@@ -233,9 +208,7 @@ function Policy() {
 
         const data = res.data;
 
-        if (data?.plan) {
-          setPlan(data.plan);
-        }
+        if (data?.plan) setPlan(data.plan);
 
         if (data?.locked_until) {
           const lock = new Date(data.locked_until);
@@ -247,7 +220,6 @@ function Policy() {
             const days = Math.ceil(
               (lock.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
             );
-
             setLockMessage(`Plan locked 🔒 (${days} days remaining)`);
           } else {
             setIsLocked(false);
@@ -293,7 +265,6 @@ function Policy() {
     }
   }, [outlookRisk, isLocked]);
 
-  // Plan display prices. The backend determines the final payable amount.
   const plans = useMemo(() => {
     const base = price > 0 ? price : 20;
     const moderate = Math.round(base * 1.25);
@@ -335,11 +306,29 @@ function Policy() {
     ];
   }, [price]);
 
-  // Keep the current plan selected when locked.
+  // ---- Upgrade helpers ----
+  // While locked, only plans ranked higher than the current plan are selectable.
+  const canUpgradeTo = (p) =>
+    isLocked && plan && PLAN_RANK[p.name] > PLAN_RANK[plan];
+
+  const isUpgrade = Boolean(
+    isLocked && selectedPlan && canUpgradeTo(selectedPlan)
+  );
+
+  const currentPlanPrice = plans.find((p) => p.name === plan)?.price ?? 0;
+  const upgradeCost = isUpgrade
+    ? Math.max(selectedPlan.price - currentPlanPrice, 1)
+    : 0;
+
+  // Keep the current plan selected when locked, unless an upgrade was chosen.
   useEffect(() => {
     if (isLocked && plan) {
-      const mine = plans.find((p) => p.name === plan);
-      if (mine) setSelectedPlan(mine);
+      setSelectedPlan((prev) => {
+        if (prev && PLAN_RANK[prev.name] > PLAN_RANK[plan]) {
+          return plans.find((p) => p.name === prev.name) || prev;
+        }
+        return plans.find((p) => p.name === plan) || null;
+      });
       return;
     }
 
@@ -349,9 +338,8 @@ function Policy() {
     }
   }, [recommendedPlan, plans, isLocked, plan]);
 
-  // Create an order and open real Razorpay Checkout.
   async function handleConfirm() {
-    if (isLocked || paymentInProgress.current) return;
+    if ((isLocked && !isUpgrade) || paymentInProgress.current) return;
 
     if (!selectedPlan) {
       showToast("Please select a plan ⚠️", "error");
@@ -366,6 +354,8 @@ function Policy() {
       return;
     }
 
+    const upgradeFlow = isUpgrade;
+
     paymentInProgress.current = true;
     setPaymentLoading(true);
 
@@ -376,16 +366,15 @@ function Policy() {
         throw new Error("Could not load Razorpay Checkout. Please try again.");
       }
 
-      // The backend calculates the final price and creates the order.
+      // The backend calculates the final price (or upgrade difference).
       const orderResponse = await axios.post(
         `${API_BASE}/insurance/create-order`,
         {
           plan: selectedPlan.name,
           quoted_price: price,
+          upgrade: upgradeFlow,
         },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
 
       const order = orderResponse.data;
@@ -399,23 +388,21 @@ function Policy() {
         amount: order.amount,
         currency: order.currency || "INR",
         name: "ZensureX",
-        description: `${order.plan} Insurance Policy`,
+        description: upgradeFlow
+          ? `Upgrade to ${order.plan}`
+          : `${order.plan} Insurance Policy`,
         order_id: order.order_id,
-
-        notes: {
-          plan: order.plan,
-        },
-
-        theme: {
-          color: "#4f46e5",
-        },
+        notes: { plan: order.plan },
+        theme: { color: "#4f46e5" },
 
         modal: {
           ondismiss: () => {
             paymentInProgress.current = false;
             setPaymentLoading(false);
             showToast(
-              "Checkout closed. Your policy has not been activated.",
+              upgradeFlow
+                ? "Checkout closed. Your plan has not been upgraded."
+                : "Checkout closed. Your policy has not been activated.",
               "error"
             );
           },
@@ -423,8 +410,7 @@ function Policy() {
 
         handler: async (response) => {
           try {
-            // Never activate a policy from the browser callback alone.
-            // The backend verifies the signature and payment status.
+            // Never activate or upgrade a policy from the browser callback alone.
             const verifyResponse = await axios.post(
               `${API_BASE}/insurance/verify-payment`,
               {
@@ -432,9 +418,7 @@ function Policy() {
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_signature: response.razorpay_signature,
               },
-              {
-                headers: { Authorization: `Bearer ${token}` },
-              }
+              { headers: { Authorization: `Bearer ${token}` } }
             );
 
             const verified = verifyResponse.data;
@@ -445,14 +429,18 @@ function Policy() {
               const lock = new Date(verified.locked_until);
               setLockDate(lock);
               setIsLocked(lock > new Date());
-              setLockMessage("Plan locked for 7 days 🔒");
+              setLockMessage("Plan locked 🔒");
             }
 
             setCountdown("");
-            showToast("✅ Test payment verified. Policy activated!", "success");
+            showToast(
+              upgradeFlow
+                ? "✅ Plan upgraded!"
+                : "✅ Test payment verified. Policy activated!",
+              "success"
+            );
           } catch (err) {
             console.error("Payment verification failed", err);
-
             showToast(
               err.response?.data?.detail ||
                 "Payment verification failed. Check your policy status before retrying.",
@@ -469,10 +457,8 @@ function Policy() {
 
       checkout.on("payment.failed", (response) => {
         console.error("Razorpay payment failed", response.error);
-
         paymentInProgress.current = false;
         setPaymentLoading(false);
-
         showToast(
           response.error?.description || "Payment failed. Please try again.",
           "error"
@@ -501,7 +487,6 @@ function Policy() {
     }
   }
 
-  // Used for the coverage chips on each plan card
   const coverageItems = [
     { key: "rain", icon: "🌧️", label: "Rain" },
     { key: "heat", icon: "🔥", label: "Heat" },
@@ -511,10 +496,7 @@ function Policy() {
   const cityName = capitalize(city) || "your city";
   const basePrice = plans[0]?.price ?? 0;
   const riskStyle = LEVEL_STYLES[risk] || LEVEL_STYLES.LOW;
-  const markerLeft = Math.min(
-    100,
-    Math.max(0, ((basePrice - 20) / 32) * 100)
-  );
+  const markerLeft = Math.min(100, Math.max(0, ((basePrice - 20) / 32) * 100));
 
   return (
     <section className="scene active">
@@ -576,6 +558,11 @@ function Policy() {
             {lockMessage}
             <br />
             ⏳ Unlocks in: {countdown || "Calculating..."}
+            {plan !== "Premium" && (
+              <div style={{ fontSize: 12, fontWeight: 500, color: "#4f46e5", marginTop: 6 }}>
+                You can still upgrade to a higher plan and pay only the difference.
+              </div>
+            )}
           </div>
         )}
 
@@ -590,15 +577,15 @@ function Policy() {
             const active = selectedPlan?.name === p.name;
             const isRecommended = !isLocked && recommendedPlan === p.name;
             const isMine = isLocked && plan === p.name;
+            const upgradable = canUpgradeTo(p);
+            const disabledCard = isLocked && !upgradable;
 
             return (
-              // Outer wrapper handles the one-time entrance animation
               <motion.div
                 key={p.name}
                 variants={cardVariants}
                 style={{ height: "100%" }}
               >
-                {/* Inner card handles the recommended-plan animation */}
                 <motion.div
                   className={`price-card ${active ? "active glow" : ""} ${
                     isRecommended ? "highlight" : ""
@@ -606,7 +593,7 @@ function Policy() {
                   style={{
                     position: "relative",
                     height: "100%",
-                    ...(isLocked && !isMine ? { opacity: 0.5 } : {}),
+                    ...(disabledCard && !isMine ? { opacity: 0.5 } : {}),
                   }}
                   animate={
                     isRecommended
@@ -626,14 +613,13 @@ function Policy() {
                       : { duration: 0.3 }
                   }
                   whileHover={
-                    isLocked ? {} : { scale: isRecommended ? 1.04 : 1.03 }
+                    disabledCard ? {} : { scale: isRecommended ? 1.04 : 1.03 }
                   }
-                  whileTap={isLocked ? {} : { scale: 0.98 }}
+                  whileTap={disabledCard ? {} : { scale: 0.98 }}
                   onClick={() => {
-                    if (!isLocked && !paymentLoading) setSelectedPlan(p);
+                    if (!disabledCard && !paymentLoading) setSelectedPlan(p);
                   }}
                 >
-                  {/* Shimmer sweep (recommended only) */}
                   {isRecommended && (
                     <div
                       style={{
@@ -666,7 +652,6 @@ function Policy() {
                     </div>
                   )}
 
-                  {/* Floating badge (recommended only) */}
                   {isRecommended && (
                     <motion.div
                       className="badge"
@@ -696,7 +681,6 @@ function Policy() {
                     ))}
                   </ul>
 
-                  {/* Which events this plan covers */}
                   <div
                     style={{
                       display: "flex",
@@ -708,7 +692,6 @@ function Policy() {
                   >
                     {coverageItems.map((t) => {
                       const covered = p.covers.includes(t.key);
-
                       return (
                         <span
                           key={t.key}
@@ -730,18 +713,22 @@ function Policy() {
 
                   <button
                     className="btn"
-                    disabled={active || isLocked || paymentLoading}
+                    disabled={active || disabledCard || paymentLoading}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (!isLocked && !paymentLoading) setSelectedPlan(p);
+                      if (!disabledCard && !paymentLoading) setSelectedPlan(p);
                     }}
                   >
-                    {isLocked
-                      ? isMine
-                        ? "Your plan 🔒"
-                        : "Unavailable"
+                    {isMine
+                      ? "Your plan 🔒"
+                      : disabledCard
+                      ? "Unavailable"
                       : active
-                      ? "Selected"
+                      ? upgradable
+                        ? "Upgrade selected"
+                        : "Selected"
+                      : upgradable
+                      ? "Upgrade"
                       : "Select Plan"}
                   </button>
                 </motion.div>
@@ -782,7 +769,6 @@ function Policy() {
             />
           ) : (
             <>
-              {/* Risk level + what caused it */}
               <div style={{ marginBottom: 16 }}>
                 <span
                   style={{
@@ -799,25 +785,13 @@ function Policy() {
                   {riskStyle.label} risk today
                 </span>
 
-                <p
-                  style={{
-                    margin: "0 0 4px",
-                    fontSize: 12,
-                    color: "#64748b",
-                  }}
-                >
+                <p style={{ margin: "0 0 4px", fontSize: 12, color: "#64748b" }}>
                   Now: rain {Number(rainMm).toFixed(1)} mm/h ·{" "}
                   {Number(temp).toFixed(1)}°C · AQI {Math.round(aqi)}
                 </p>
 
                 {breakdown.length === 0 ? (
-                  <p
-                    style={{
-                      margin: "6px 0 0",
-                      fontSize: 13,
-                      color: "#475569",
-                    }}
-                  >
+                  <p style={{ margin: "6px 0 0", fontSize: 13, color: "#475569" }}>
                     ✅ Calm weather. Nothing is adding to your price.
                   </p>
                 ) : (
@@ -839,13 +813,9 @@ function Policy() {
                 )}
               </div>
 
-              {/* Price band meter */}
               <div style={{ marginBottom: 16 }}>
-                <div
-                  style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}
-                >
-                  {riskStyle.label} risk prices range from ₹{band[0]} to ₹
-                  {band[1]}
+                <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}>
+                  {riskStyle.label} risk prices range from ₹{band[0]} to ₹{band[1]}
                 </div>
                 <div
                   style={{
@@ -884,7 +854,6 @@ function Policy() {
                 </div>
               </div>
 
-              {/* Forecast */}
               <div
                 style={{
                   padding: "10px 14px",
@@ -900,49 +869,49 @@ function Policy() {
                   : "✅ No worse weather expected in the next 6 hours, so no extra charge."}
               </div>
 
-              {/* Plans */}
               <p style={{ margin: "0 0 6px", fontSize: 13, color: "#334155" }}>
                 <b>Plans:</b> Moderate costs about 1.25× Basic and Premium
                 about 1.5×. Cover amounts are ₹5,000, ₹10,000 and ₹20,000.
               </p>
               <p style={{ margin: 0, fontSize: 13, color: "#334155" }}>
-                <b>Lock:</b> After you pay, your plan is locked for 7 days.
+                <b>Lock:</b> After you pay, your plan is locked for 7 days. You
+                can upgrade to a higher plan anytime and pay only the
+                difference.
               </p>
             </>
           )}
 
           <p style={{ margin: "14px 0 0", fontSize: 12, color: "#94a3b8" }}>
-            {dataFallback
-              ? "Weather data is estimated right now, not live. "
-              : ""}
+            {dataFallback ? "Weather data is estimated right now, not live. " : ""}
             The final amount is confirmed by the server at checkout.
           </p>
         </div>
 
-        {/* REAL RAZORPAY TEST CHECKOUT */}
+        {/* RAZORPAY TEST CHECKOUT */}
         <div style={{ textAlign: "center", marginTop: "20px" }}>
           <button
             className="btn-primary"
             onClick={handleConfirm}
-            disabled={isLocked || !selectedPlan || paymentLoading || loading}
+            disabled={
+              (isLocked && !isUpgrade) ||
+              !selectedPlan ||
+              paymentLoading ||
+              loading
+            }
           >
-            {isLocked
-              ? "Plan Locked 🔒"
+            {isLocked && !isUpgrade
+              ? "Plan Locked 🔒 (select a higher plan to upgrade)"
               : paymentLoading
               ? "Opening secure checkout..."
               : loading
               ? "Loading your quote..."
+              : isUpgrade
+              ? `Upgrade to ${selectedPlan.name} (pay ₹${upgradeCost})`
               : `Pay ₹${selectedPlan?.price ?? 0}/week with Razorpay`}
           </button>
 
-          {!isLocked && (
-            <p
-              style={{
-                color: "#64748b",
-                fontSize: "12px",
-                marginTop: "8px",
-              }}
-            >
+          {(!isLocked || isUpgrade) && (
+            <p style={{ color: "#64748b", fontSize: "12px", marginTop: "8px" }}>
               Razorpay Test Mode only. Test payments do not collect real money.
               The final amount is confirmed by the server.
             </p>
