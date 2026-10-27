@@ -43,12 +43,22 @@ else:
 
 
 # --------------------------------------------------
+# PLAN ORDER (used to allow upgrades only)
+# --------------------------------------------------
+
+PLAN_RANK = {"Basic": 1, "Moderate": 2, "Premium": 3}
+
+
+# --------------------------------------------------
 # REQUEST SCHEMAS
 # --------------------------------------------------
 
 class CreatePaymentOrder(BaseModel):
     plan: str
     quoted_price: Optional[float] = None
+    # Sent by the frontend for convenience. The server decides on its own
+    # whether this is an upgrade, so this value is never trusted.
+    upgrade: Optional[bool] = False
 
 
 class VerifyPayment(BaseModel):
@@ -68,6 +78,17 @@ def _naive_utc(dt):
     if dt.tzinfo is not None:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
+
+
+def _is_locked(policy) -> bool:
+    """True while the policy's seven-day lock is still running."""
+    if not policy or not policy.locked_until:
+        return False
+    return _naive_utc(policy.locked_until) > datetime.utcnow()
+
+
+def _is_higher_plan(new_plan: str, current_plan: Optional[str]) -> bool:
+    return PLAN_RANK.get(new_plan, 0) > PLAN_RANK.get(current_plan or "", 0)
 
 
 def calculate_plan_price(user, plan: str, quoted_price: Optional[float]):
@@ -110,23 +131,29 @@ def calculate_plan_price(user, plan: str, quoted_price: Optional[float]):
     return premium, coverage
 
 
-def check_policy_lock(db: Session, user_id: int):
-    """Enforce the existing seven-day policy lock on the backend."""
+def check_policy_lock(db: Session, user_id: int, new_plan: Optional[str] = None):
+    """Enforce the seven-day lock on the backend.
+
+    While the policy is locked, the only allowed change is an UPGRADE to a
+    higher plan. Same-plan purchases and downgrades are rejected.
+    Returns the latest policy (or None).
+    """
 
     policy = get_latest_policy(db, user_id)
 
-    if policy and policy.locked_until:
-        locked_until = _naive_utc(policy.locked_until)
-        now = datetime.utcnow()
+    if _is_locked(policy):
+        if new_plan and _is_higher_plan(new_plan, policy.plan_name):
+            return policy  # upgrade allowed
 
-        if locked_until > now:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Plan is locked until "
-                    f"{locked_until.strftime('%d %b %Y, %I:%M %p')} UTC"
-                ),
-            )
+        locked_until = _naive_utc(policy.locked_until)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Plan is locked until "
+                f"{locked_until.strftime('%d %b %Y, %I:%M %p')} UTC. "
+                "You can only upgrade to a higher plan."
+            ),
+        )
 
     return policy
 
@@ -228,6 +255,8 @@ def get_policy_lock_status(
 
         return {
             "plan": policy.plan_name,
+            # NEW: lets the frontend show the exact upgrade price
+            "premium": policy.premium,
             "locked_until": (
                 policy.locked_until.isoformat()
                 if policy.locked_until
@@ -244,7 +273,7 @@ def get_policy_lock_status(
 
 
 # --------------------------------------------------
-# NEW: PLAN + PAYMENT HISTORY FOR THE PROFILE PAGE
+# PLAN + PAYMENT HISTORY FOR THE PROFILE PAGE
 # --------------------------------------------------
 
 @router.get("/history")
@@ -321,32 +350,47 @@ def create_payment_order(
             detail="Razorpay is not configured on the server",
         )
 
-    check_policy_lock(db, user.id)
+    # While locked, only a higher plan passes this check.
+    policy = check_policy_lock(db, user.id, data.plan)
 
-    premium, coverage = calculate_plan_price(
+    full_premium, coverage = calculate_plan_price(
         user,
         data.plan,
         data.quoted_price,
     )
 
+    # The server decides if this is an upgrade (never the client).
+    is_upgrade = _is_locked(policy)
+
+    if is_upgrade:
+        # Pay only the difference between the new plan and what is
+        # already active. Minimum charge is Rs 1.
+        amount_to_pay = max(full_premium - int(policy.premium or 0), 1)
+    else:
+        amount_to_pay = full_premium
+
     try:
         order = razorpay_client.order.create(
             data={
-                "amount": premium * 100,
+                "amount": amount_to_pay * 100,
                 "currency": "INR",
                 "receipt": f"ins_{user.id}_{int(datetime.utcnow().timestamp())}",
                 "notes": {
                     "user_id": str(user.id),
                     "plan_name": data.plan,
+                    "upgrade": "1" if is_upgrade else "0",
+                    # Full price of the new plan, saved on the policy at verify
+                    "full_premium": str(full_premium),
                 },
             }
         )
 
+        # record.premium = the amount actually charged for this payment.
         payment_record = InsurancePayment(
             user_id=user.id,
             order_id=order["id"],
             plan_name=data.plan,
-            premium=premium,
+            premium=amount_to_pay,
             coverage=coverage,
             status="PENDING",
         )
@@ -360,8 +404,10 @@ def create_payment_order(
             "amount": order["amount"],
             "currency": order["currency"],
             "plan": data.plan,
-            "premium": premium,
+            "premium": amount_to_pay,
+            "full_premium": full_premium,
             "coverage": coverage,
+            "is_upgrade": is_upgrade,
         }
 
     except HTTPException:
@@ -376,16 +422,17 @@ def create_payment_order(
 
 
 # --------------------------------------------------
-# STEP 2: VERIFY PAYMENT AND ACTIVATE POLICY
+# STEP 2: VERIFY PAYMENT AND ACTIVATE / UPGRADE POLICY
 # --------------------------------------------------
 
-def _verify_response(message: str, record, policy):
+def _verify_response(message: str, record, policy, is_upgrade: bool = False):
     return {
         "message": message,
         "plan": record.plan_name,
         "premium": record.premium,
         "coverage": record.coverage,
         "payment_id": record.payment_id,
+        "is_upgrade": is_upgrade,
         "locked_until": (
             policy.locked_until.isoformat()
             if policy and policy.locked_until
@@ -504,14 +551,48 @@ def verify_payment(
                 detail="Payment has not been captured",
             )
 
-        # Check the lock again before activating the policy.
-        policy = check_policy_lock(db, user.id)
+        # Read the notes we saved on the order at create-order time.
+        # They were written by the server, so they can be trusted.
+        order = razorpay_client.order.fetch(record.order_id)
+        notes = order.get("notes") or {}
+        is_upgrade = notes.get("upgrade") == "1"
+        try:
+            full_premium = int(notes.get("full_premium") or record.premium)
+        except (TypeError, ValueError):
+            full_premium = record.premium
+
+        # Check the lock again before changing the policy.
+        # Locked   -> only an upgrade order may pass.
+        # Unlocked -> only a normal purchase may pass.
+        policy = get_latest_policy(db, user.id)
+        locked = _is_locked(policy)
+
+        if locked:
+            if not is_upgrade or not _is_higher_plan(
+                record.plan_name, policy.plan_name
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Plan is locked. Only upgrades to a higher plan are allowed.",
+                )
+        elif is_upgrade:
+            # The lock expired between order creation and payment, but the
+            # amount paid was only the upgrade difference.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Your lock expired while paying, so this upgrade order is "
+                    "no longer valid. Please contact support for a refund."
+                ),
+            )
 
         now = datetime.utcnow()
 
         if policy:
             policy.plan_name = record.plan_name
-            policy.premium = record.premium
+            # Policy stores the FULL price of the new plan, so the next
+            # upgrade difference is calculated correctly.
+            policy.premium = full_premium if is_upgrade else record.premium
             policy.coverage = record.coverage
             policy.status = "ACTIVE"
         else:
@@ -524,7 +605,10 @@ def verify_payment(
             )
             db.add(policy)
 
-        policy.locked_until = now + timedelta(days=7)
+        # A normal purchase starts a new 7-day lock.
+        # An upgrade keeps the existing lock window untouched.
+        if not is_upgrade:
+            policy.locked_until = now + timedelta(days=7)
 
         # Mark processing first so a failed pool credit can be retried.
         record.payment_id = data.razorpay_payment_id
@@ -534,6 +618,7 @@ def verify_payment(
         db.refresh(policy)
 
         # The ref (payment id) means this payment is credited only once.
+        # Only the amount actually paid (the difference for upgrades) is credited.
         zone = zone_pool.zone_of_user(user)
         zone_pool.add_premium(
             db,
@@ -549,7 +634,12 @@ def verify_payment(
         db.refresh(policy)
 
         return _verify_response(
-            "Payment verified and policy activated", record, policy
+            "Plan upgraded successfully"
+            if is_upgrade
+            else "Payment verified and policy activated",
+            record,
+            policy,
+            is_upgrade,
         )
 
     except HTTPException:
