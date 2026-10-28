@@ -819,6 +819,9 @@ function Dashboard() {
   const temp = data?.weather?.temp ?? 0;
   const humidity = data?.weather?.humidity;
   const rainMm = data?.weather?.rain_mm ?? 0;
+  const rain24h = data?.weather?.rain_24h ?? 0;           // rain that fell in the last 24 hours
+  const windKmh = data?.weather?.wind_kmh;                // sustained wind
+  const gustKmh = data?.weather?.gust_kmh;                // gusts
   const aqi = data?.aqi ?? 0;
   const shownCity = gpsOk ? (place || "Your current location") : "Location needed";
   const forecast = data?.forecast || null;
@@ -886,7 +889,19 @@ function Dashboard() {
   // ---- banner under the hero ----
   let banner = { tone: "", icon: "✅", text: "Conditions are stable. Auto payout is watching your zone." };
   if (data) {
-    if (isStorm) {
+    if (data.alerts?.length) {
+      // official IMD / NDMA alert for the user's own location comes first
+      const top = data.alerts[0];
+      banner = {
+        tone: top.level === "HIGH" ? "danger" : "warn",
+        icon: "🌀",
+        text: `${top.headline}${top.source ? ` (${top.source})` : ""}${
+          pool?.plan
+            ? ". Your plan pays out automatically if conditions trigger it."
+            : ". Choose a plan to stay covered."
+        }`
+      };
+    } else if (isStorm) {
       banner = {
         tone: "danger",
         icon: "⛈",
@@ -1005,18 +1020,22 @@ function Dashboard() {
       .catch(err => console.error("Pool load failed", err));
   }, [data, gpsStatus]);
 
-  const riskKey = data?.risk || "LOW";
+  // ONE risk for the gauge, the map and the legend:
+  // the worst of "now" and the outlook, so the gauge never says LOW while the outlook says MEDIUM/HIGH.
+  const gaugeRisk = data?.outlook_risk || data?.risk || "LOW";
+  const riskKey = gaugeRisk;
   const riskColor = RISK[riskKey] || RISK.LOW;
 
   const forecastCards = [
-    { label: "Now", temp, rain: rainMm, pop: null, risk: data?.risk, storm: isStorm },
+    { label: "Now", temp, rain: rainMm, pop: null, risk: data?.risk, storm: isStorm, wind: gustKmh ?? windKmh },
     forecast?.h3 && {
       label: "Next 3 hours",
       temp: forecast.h3.temp,
       rain: forecast.h3.rain_mm,
       pop: forecast.h3.pop,
       risk: forecast.h3.risk,
-      storm: forecast.h3.condition_id >= 200 && forecast.h3.condition_id <= 232
+      storm: forecast.h3.condition_id >= 200 && forecast.h3.condition_id <= 232,
+      wind: forecast.h3.gust_kmh ?? forecast.h3.wind_kmh
     },
     forecast?.h6 && {
       label: "Next 6 hours",
@@ -1024,7 +1043,8 @@ function Dashboard() {
       rain: forecast.h6.rain_mm,
       pop: forecast.h6.pop,
       risk: forecast.h6.risk,
-      storm: forecast.h6.condition_id >= 200 && forecast.h6.condition_id <= 232
+      storm: forecast.h6.condition_id >= 200 && forecast.h6.condition_id <= 232,
+      wind: forecast.h6.gust_kmh ?? forecast.h6.wind_kmh
     }
   ].filter(Boolean);
 
@@ -1066,16 +1086,22 @@ function Dashboard() {
                 )}
                 {humidity !== undefined && <span className="zx-chip">💧 Humidity {humidity}%</span>}
                 <span className="zx-chip">🌧 Rain {Number(rainMm).toFixed(1)} mm/h</span>
+                <span className="zx-chip">🌧 Last 24h {Number(rain24h).toFixed(0)} mm</span>
+                {windKmh !== undefined && (
+                  <span className="zx-chip">
+                    💨 Wind {Number(windKmh).toFixed(0)} km/h (gusts {Number(gustKmh ?? windKmh).toFixed(0)})
+                  </span>
+                )}
                 <span className="zx-chip">🌫 AQI {aqi} ({aqiLabel(aqi)})</span>
               </div>
             )}
           </div>
 
           <div className="zx-gauge-box">
-            <RiskGauge risk={data?.risk} />
-            <p className="zx-gauge-value">{data ? `${data.risk} risk` : "Checking risk"}</p>
+            <RiskGauge risk={data ? gaugeRisk : undefined} />
+            <p className="zx-gauge-value">{data ? `${gaugeRisk} risk` : "Checking risk"}</p>
             <p className="zx-gauge-label">
-              Next 6 hours: {data ? (next6 || "Unavailable") : "..."}
+              {data ? `Now: ${data.risk} · Next 6 hours: ${next6 || "Unavailable"}` : "..."}
             </p>
             <button className="zx-refresh" onClick={() => setTick(t => t + 1)}>
               Refresh now
@@ -1109,6 +1135,13 @@ function Dashboard() {
             <span>{banner.icon}</span>
             <span>{banner.text}</span>
           </div>
+        )}
+
+        {/* WHY THIS RISK: wind, gusts, 24h rain and the model's own reasons */}
+        {data?.reason && data.reason !== "Normal conditions" && (
+          <p className="zx-muted zx-rise" style={{ "--i": 1, margin: "8px 4px 0", fontSize: 13 }}>
+            Why {gaugeRisk}: {data.reason}
+          </p>
         )}
 
         {/* KPI CARDS */}
@@ -1212,7 +1245,7 @@ function Dashboard() {
                       <Popup>
                         <b>You are here</b>
                         <br />
-                        Risk: {data?.risk || "Loading"}
+                        Risk: {data ? gaugeRisk : "Loading"}
                       </Popup>
                     </Marker>
                   </MapContainer>
@@ -1223,7 +1256,7 @@ function Dashboard() {
                         <span
                           key={k}
                           className="zx-legend-item"
-                          style={{ fontWeight: data?.risk === k ? 800 : 400 }}
+                          style={{ fontWeight: riskKey === k && data ? 800 : 400 }}
                         >
                           <span className="zx-dot" style={{ background: RISK[k] }} />
                           {k.charAt(0) + k.slice(1).toLowerCase()}
@@ -1312,6 +1345,9 @@ function Dashboard() {
                       <p className="zx-fc-risk">{c.risk}</p>
                       {c.storm && <p className="zx-fc-meta">⛈ Thunderstorm</p>}
                       <p className="zx-fc-meta">🌧 {Number(c.rain).toFixed(1)} mm/h</p>
+                      {c.wind !== undefined && c.wind !== null && (
+                        <p className="zx-fc-meta">💨 {Number(c.wind).toFixed(0)} km/h</p>
+                      )}
                       {c.pop !== null && (
                         <>
                           <p className="zx-fc-meta">☔ {c.pop}% chance</p>
