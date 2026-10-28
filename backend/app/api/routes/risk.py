@@ -85,6 +85,8 @@ def get_risk(
     lat: Optional[float] = Query(None, ge=-90, le=90),
     lon: Optional[float] = Query(None, ge=-180, le=180),
     city: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    district: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -177,7 +179,7 @@ def get_risk(
     # Official alerts (IMD / NDMA SACHET) for THIS user's GPS location
     alert = {"level": "LOW", "alerts": [], "debug": {}}
     if used_gps:
-        alert = get_alert_for_location(lat, lon)
+        alert = get_alert_for_location(lat, lon, state, district)
     if TEST_ALERT:
         alert = {
             "level": "HIGH",
@@ -262,7 +264,9 @@ def get_risk(
 def alerts_for(
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
+    state: Optional[str] = Query(None),
+    district: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
 ):
     """Test endpoint: official alerts for one GPS point."""
-    return get_alert_for_location(lat, lon)
+    return get_alert_for_location(lat, lon, state, district)
