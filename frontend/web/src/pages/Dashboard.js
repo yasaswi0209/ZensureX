@@ -201,17 +201,20 @@ async function lookupPlace(lat, lon) {
 
     const a = r.data.address || {};
 
-    return (
-      a.city ||
-      a.town ||
-      a.village ||
-      a.suburb ||
-      a.city_district ||
-      a.neighbourhood ||
-      ""
-    );
+    return {
+      name:
+        a.city ||
+        a.town ||
+        a.village ||
+        a.suburb ||
+        a.city_district ||
+        a.neighbourhood ||
+        "",
+      state: a.state || "",
+      district: a.state_district || a.county || ""
+    };
   } catch (e) {
-    return "";
+    return { name: "", state: "", district: "" };
   }
 }
 
@@ -977,8 +980,13 @@ function Dashboard() {
         setPosition([latitude, longitude]);
         setAccuracy(acc);
 
+        // state and district go to the backend so it can match official alerts to this user
+        let region = { state: "", district: "" };
+
         lookupPlace(latitude, longitude)
-          .then(name => {
+          .then(info => {
+            region = info;
+            const name = info.name;
             if (name) setPlace(name);
 
             return axios
@@ -996,7 +1004,9 @@ function Dashboard() {
           .finally(() => {
             load({
               lat: latitude,
-              lon: longitude
+              lon: longitude,
+              state: region.state || undefined,
+              district: region.district || undefined
             });
           });
       },
