@@ -242,15 +242,25 @@ def _place_names(lat, lon):
         return {"state": "", "places": []}
 
 
-def _in_polygon(lat, lon, text):
-    """CAP polygon text: 'lat,lon lat,lon lat,lon ...'"""
+def _pts(text):
+    """
+    Extract (lat, lon) pairs from CAP polygon text.
+    Reads every number, so odd spacing / separators do not break it.
+    If a pair looks like lon,lat (first > 40, second < 40) it is swapped:
+    India's latitudes are below 40, its longitudes above 68.
+    """
+    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", text or "")]
     pts = []
-    for pair in text.split():
-        try:
-            a, b = pair.split(",")
-            pts.append((float(a), float(b)))
-        except Exception:
-            continue
+    for i in range(0, len(nums) - 1, 2):
+        a, b = nums[i], nums[i + 1]
+        if a > 40 and b < 40:      # written as lon,lat -> swap
+            a, b = b, a
+        pts.append((a, b))
+    return pts
+
+
+def _in_polygon(lat, lon, text):
+    pts = _pts(text)
     if len(pts) < 3:
         return False
     inside = False
@@ -267,11 +277,15 @@ def _in_polygon(lat, lon, text):
 def _in_circle(lat, lon, text):
     """CAP circle text: 'lat,lon radius_km'"""
     try:
-        centre, radius = text.split()
-        clat, clon = (float(x) for x in centre.split(","))
+        nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", text or "")]
+        if len(nums) < 3:
+            return False
+        clat, clon, radius = nums[0], nums[1], nums[2]
+        if clat > 40 and clon < 40:    # lon,lat order -> swap
+            clat, clon = clon, clat
         dlat, dlon = radians(lat - clat), radians(lon - clon)
         a = sin(dlat / 2) ** 2 + cos(radians(clat)) * cos(radians(lat)) * sin(dlon / 2) ** 2
-        return 6371 * 2 * asin(sqrt(a)) <= float(radius)
+        return 6371 * 2 * asin(sqrt(a)) <= radius
     except Exception:
         return False
 
@@ -330,7 +344,12 @@ def get_alert_for_location(lat: float, lon: float, state=None, district=None):
                 "state": names["state"],
                 "places": names["places"],
                 "sample_events": [a["headline"][:80] for a in alerts[:8]],
-                "sample_areas": [ar["desc"][:80] for a in alerts if a["cyclone"] for ar in a["areas"]][:8],
+                # geometry info: polys=0 means the alert carries no polygon at all
+                "sample_areas": [
+                    f"{ar['desc'][:30]} | polys={len(ar['polygons'])} circles={len(ar['circles'])} "
+                    f"first={(_pts(ar['polygons'][0])[:1] if ar['polygons'] else 'none')}"
+                    for a in alerts if a["cyclone"] for ar in a["areas"]
+                ][:8],
             },
         }
     except Exception as e:
