@@ -241,6 +241,7 @@ def get_risk(
         "storm_risk": storm_now,
         "alert_level": alert["level"],
         "alerts": alert["alerts"],
+        "alert_debug": alert.get("debug", {}),
         "risk_points": premium_data["risk_points"],
         "breakdown": premium_data["breakdown"],
         "band": premium_data["band"],
