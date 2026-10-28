@@ -1154,6 +1154,25 @@ function Dashboard() {
           </p>
         )}
 
+        {/* ALERT STATUS: only visible with ?debug=1 in the page address */}
+        {urlParams.get("debug") === "1" && data && (
+          <div className="zx-muted" style={{ margin: "6px 4px 0", fontSize: 12, lineHeight: 1.6 }}>
+            <div>
+              Official alerts matched: <b>{data.alerts?.length || 0}</b> · loaded{" "}
+              <b>{data.alert_debug?.alerts_loaded ?? "?"}</b> · cyclone{" "}
+              <b>{data.alert_debug?.cyclone_alerts ?? "?"}</b>
+            </div>
+            <div>
+              Your area: <b>{data.alert_debug?.state || "unknown"}</b> /{" "}
+              <b>{(data.alert_debug?.places || []).join(", ") || "unknown"}</b>
+            </div>
+            {data.alert_debug?.sample_areas?.length > 0 && (
+              <div>Cyclone alert areas: {data.alert_debug.sample_areas.join(" | ")}</div>
+            )}
+            {data.alert_debug?.error && <div>Error: {data.alert_debug.error}</div>}
+          </div>
+        )}
+
         {/* KPI CARDS */}
         <div className="zx-kpis">
 
