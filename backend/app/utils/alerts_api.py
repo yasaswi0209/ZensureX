@@ -131,13 +131,24 @@ def _parse_cap(xml_bytes):
 
         areas = []
         for a in _kids(info, "area"):
+            geocodes = []
+            for g in _kids(a, "geocode"):
+                geocodes.append(f"{_first_text(g, 'valueName')}={_first_text(g, 'value')}"[:60])
             areas.append({
                 "desc": _first_text(a, "areaDesc"),
                 "polygons": [(p.text or "").strip() for p in _kids(a, "polygon")],
                 "circles": [(c.text or "").strip() for c in _kids(a, "circle")],
+                "tags": sorted({_strip(c.tag) for c in a}),
+                "geocodes": geocodes,
             })
 
+        resources = []
+        for r in _kids(info, "resource"):
+            resources.append(f"{_first_text(r, 'mimeType')} {_first_text(r, 'uri')}"[:120])
+
         out.append({
+            "text": f"{headline} {description}".lower(),
+            "resources": resources,
             "event": event,
             "headline": headline,
             "severity": severity,
@@ -291,6 +302,16 @@ def _in_circle(lat, lon, text):
 
 
 def _matches(alert, lat, lon, names):
+    # Fallback for alerts that carry no polygon/circle at all: look for the
+    # user's district (or, for cyclones, state) in the alert's own text.
+    has_geometry = any(ar["polygons"] or ar["circles"] for ar in alert["areas"])
+    if not has_geometry:
+        text = alert.get("text", "")
+        if any(_has(text, p) for p in names["places"]):
+            return True
+        if alert["cyclone"] and names["state"] and _has(text, names["state"]):
+            return True
+
     for area in alert["areas"]:
         if any(_in_polygon(lat, lon, p) for p in area["polygons"]):
             return True
@@ -347,9 +368,10 @@ def get_alert_for_location(lat: float, lon: float, state=None, district=None):
                 # geometry info: polys=0 means the alert carries no polygon at all
                 "sample_areas": [
                     f"{ar['desc'][:30]} | polys={len(ar['polygons'])} circles={len(ar['circles'])} "
-                    f"first={(_pts(ar['polygons'][0])[:1] if ar['polygons'] else 'none')}"
+                    f"tags={ar['tags']} geocodes={ar['geocodes'][:2]} "
+                    f"resources={a['resources'][:1]} text={a['text'][:120]}"
                     for a in alerts if a["cyclone"] for ar in a["areas"]
-                ][:8],
+                ][:3],
             },
         }
     except Exception as e:
