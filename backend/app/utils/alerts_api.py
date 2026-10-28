@@ -216,12 +216,17 @@ def _place_names(lat, lon):
         return _geo_cache[key]
 
     try:
-        res = requests.get(
+        resp = requests.get(
             NOMINATIM_URL,
             params={"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10, "addressdetails": 1},
             headers=HEADERS,
             timeout=TIMEOUT,
-        ).json()
+        )
+        if resp.status_code != 200:
+            # usually 403 / 429: Nominatim blocks shared cloud servers or placeholder e-mails
+            print("Reverse geocode HTTP", resp.status_code)
+            return {"state": "", "places": []}
+        res = resp.json()
         addr = res.get("address") or {}
         places = []
         for k in ("state_district", "county", "city", "town", "village", "suburb"):
@@ -229,7 +234,8 @@ def _place_names(lat, lon):
             if len(v) >= 3 and v not in places:
                 places.append(v)
         names = {"state": (addr.get("state") or "").lower(), "places": places}
-        _geo_cache[key] = names
+        if names["state"] or names["places"]:      # never cache an empty answer
+            _geo_cache[key] = names
         return names
     except Exception as e:
         print("Reverse geocode error:", e)
@@ -288,7 +294,7 @@ def _matches(alert, lat, lon, names):
 
 # ------------------------------------------------------------------ public ---
 
-def get_alert_for_location(lat: float, lon: float):
+def get_alert_for_location(lat: float, lon: float, state=None, district=None):
     """
     Returns:
       {"level": "LOW|MEDIUM|HIGH",
@@ -300,6 +306,14 @@ def get_alert_for_location(lat: float, lon: float):
         alerts = _load_alerts()
         names = _place_names(lat, lon)
 
+        # Names sent by the user's browser only fill gaps when the server lookup failed.
+        # (Before using this for payouts, verify the location on the server instead.)
+        extra_state = (state or "").strip().lower()
+        extra_place = (district or "").strip().lower().replace(" district", "")
+        names = {"state": names["state"] or extra_state, "places": list(names["places"])}
+        if len(extra_place) >= 3 and extra_place not in names["places"]:
+            names["places"].append(extra_place)
+
         hits = [a for a in alerts if _matches(a, lat, lon, names)]
         hits.sort(key=lambda a: LEVEL_ORDER[a["level"]], reverse=True)
 
@@ -310,7 +324,14 @@ def get_alert_for_location(lat: float, lon: float):
                 {k: a[k] for k in ("headline", "event", "severity", "level", "source", "expires")}
                 for a in hits[:5]
             ],
-            "debug": {"alerts_loaded": len(alerts), "state": names["state"], "places": names["places"]},
+            "debug": {
+                "alerts_loaded": len(alerts),
+                "cyclone_alerts": sum(1 for a in alerts if a["cyclone"]),
+                "state": names["state"],
+                "places": names["places"],
+                "sample_events": [a["headline"][:80] for a in alerts[:8]],
+                "sample_areas": [ar["desc"][:80] for a in alerts if a["cyclone"] for ar in a["areas"]][:8],
+            },
         }
     except Exception as e:
         print("Alert lookup failed:", e)
