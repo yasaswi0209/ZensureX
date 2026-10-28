@@ -21,6 +21,11 @@ TIMEOUT = 8
 _GEO_CACHE = {}
 
 
+def _kmh(ms):
+    """OpenWeather gives wind in m/s. Convert to km/h."""
+    return round(float(ms or 0) * 3.6, 1)
+
+
 def _fallback():
     # "fallback": True lets the caller know real data was not available
     return {
@@ -30,6 +35,9 @@ def _fallback():
         "humidity": 50,
         "condition": "",
         "condition_id": 800,
+        "wind_kmh": 0,
+        "gust_kmh": 0,
+        "rain_24h": 0,
         "fallback": True,
     }
 
@@ -46,6 +54,10 @@ def _parse_current(res: dict):
     rain_mm = (res.get("rain") or {}).get("1h", 0) or 0
     rain = 1 if (rain_mm > 0 or condition in RAIN_CONDITIONS) else 0
 
+    wind = res.get("wind") or {}
+    wind_kmh = _kmh(wind.get("speed"))
+    gust_kmh = _kmh(wind.get("gust") or wind.get("speed"))
+
     return {
         "rain": rain,
         "rain_mm": rain_mm,
@@ -54,6 +66,9 @@ def _parse_current(res: dict):
         "condition": condition,          # e.g. "Rain", "Thunderstorm"
         "condition_id": cond_id,         # e.g. 501, 211
         "description": w0.get("description", ""),
+        "wind_kmh": wind_kmh,
+        "gust_kmh": max(gust_kmh, wind_kmh),
+        "rain_24h": 0,                   # filled in later from Open-Meteo
     }
 
 
@@ -93,7 +108,7 @@ def _open_meteo_current(lat: float, lon: float):
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code",
+                "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m",
                 "timezone": "auto",
             },
             timeout=TIMEOUT,
@@ -107,10 +122,34 @@ def _open_meteo_current(lat: float, lon: float):
             "condition": cname,
             "condition_id": cid,
             "description": _wmo_text(c.get("weather_code")),
+            # Open-Meteo already gives km/h
+            "wind_kmh": float(c.get("wind_speed_10m") or 0),
+            "gust_kmh": float(c.get("wind_gusts_10m") or 0),
         }
     except Exception as e:
         print("Open-Meteo current error:", e)
         return None
+
+
+def _open_meteo_rain_24h(lat: float, lon: float):
+    """Total rain (mm) that fell in the last 24 hours. 0 if the lookup fails."""
+    try:
+        res = requests.get(
+            OM_FORECAST_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": "precipitation",
+                "past_hours": 24,
+                "forecast_hours": 1,
+                "timezone": "auto",
+            },
+            timeout=TIMEOUT,
+        ).json()
+        return round(sum(float(v or 0) for v in res["hourly"]["precipitation"]), 1)
+    except Exception as e:
+        print("Open-Meteo 24h rain error:", e)
+        return 0
 
 
 def _merge_current(ow: dict, om):
@@ -131,6 +170,9 @@ def _merge_current(ow: dict, om):
             "condition": om["condition"],
             "condition_id": om["condition_id"],
             "description": om["description"],
+            "wind_kmh": om.get("wind_kmh") or 0,
+            "gust_kmh": om.get("gust_kmh") or 0,
+            "rain_24h": 0,
         }
 
     ow_wet = ow.get("rain") == 1
@@ -143,6 +185,10 @@ def _merge_current(ow: dict, om):
 
     ow["rain_mm"] = max(ow.get("rain_mm") or 0, om["rain_mm"])
     ow["rain"] = 1 if (ow_wet or om_wet) else 0
+
+    # take the stronger wind of the two sources
+    ow["wind_kmh"] = max(ow.get("wind_kmh") or 0, om.get("wind_kmh") or 0)
+    ow["gust_kmh"] = max(ow.get("gust_kmh") or 0, om.get("gust_kmh") or 0)
     return ow
 
 
@@ -161,7 +207,9 @@ def get_weather_data(city: str):
 
     coords = _geocode_city(city)
     om = _open_meteo_current(coords[0], coords[1]) if coords else None
-    return _merge_current(ow, om)
+    weather = _merge_current(ow, om)
+    weather["rain_24h"] = _open_meteo_rain_24h(coords[0], coords[1]) if coords else 0
+    return weather
 
 
 def get_weather_by_coords(lat: float, lon: float):
@@ -177,7 +225,9 @@ def get_weather_by_coords(lat: float, lon: float):
         print("Weather API (coords) error:", e)
         ow = _fallback()
 
-    return _merge_current(ow, _open_meteo_current(lat, lon))
+    weather = _merge_current(ow, _open_meteo_current(lat, lon))
+    weather["rain_24h"] = _open_meteo_rain_24h(lat, lon)
+    return weather
 
 
 # -------------------------------------------------------------------- AQI ---
@@ -228,6 +278,9 @@ def get_weather_forecast(city: str):
         rain_mm = (nxt.get("rain") or {}).get("3h", 0) or 0
         rain = 1 if (rain_mm > 0 or condition in RAIN_CONDITIONS) else 0
 
+        wind = nxt.get("wind") or {}
+        wind_kmh = _kmh(wind.get("speed"))
+
         return {
             "temp": nxt["main"]["temp"],
             "humidity": nxt["main"]["humidity"],
@@ -235,6 +288,8 @@ def get_weather_forecast(city: str):
             "rain_mm": rain_mm,
             "condition": condition,
             "condition_id": w0.get("id", 800),
+            "wind_kmh": wind_kmh,
+            "gust_kmh": max(_kmh(wind.get("gust")), wind_kmh),
         }
     except Exception as e:
         print("Forecast API error:", e)
@@ -292,6 +347,7 @@ def _open_meteo_forecast(lat: float, lon: float):
     Hourly forecast from Open-Meteo.
       h3 = worst hour from now to +3h
       h6 = worst hour from +4h to +6h
+    Each slot also carries the STRONGEST wind and gust in its window.
     Returns None if anything goes wrong, so the caller can fall back to OpenWeather.
     """
     try:
@@ -300,7 +356,7 @@ def _open_meteo_forecast(lat: float, lon: float):
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "hourly": "temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,weather_code",
+                "hourly": "temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m",
                 "forecast_days": 2,
                 "timezone": "auto",
             },
@@ -333,9 +389,19 @@ def _open_meteo_forecast(lat: float, lon: float):
             "condition_id": cid,
         }
 
+    def peak_wind(indexes):
+        idx = [i for i in indexes if i < len(times)]
+        if not idx:
+            return 0, 0
+        wind = max(float(h["wind_speed_10m"][i] or 0) for i in idx)
+        gust = max(float(h["wind_gusts_10m"][i] or 0) for i in idx)
+        return wind, gust
+
     try:
-        first = [build(i) for i in range(start, min(start + 4, len(times)))]
-        second = [build(i) for i in range(start + 4, min(start + 7, len(times)))]
+        first_idx = list(range(start, min(start + 4, len(times))))
+        second_idx = list(range(start + 4, min(start + 7, len(times))))
+        first = [build(i) for i in first_idx]
+        second = [build(i) for i in second_idx]
     except Exception as e:
         print("Open-Meteo parse error:", e)
         return None
@@ -344,6 +410,14 @@ def _open_meteo_forecast(lat: float, lon: float):
     h6 = _worst_slot(second)
     if not h3 or not h6:
         return None
+
+    try:
+        h3["wind_kmh"], h3["gust_kmh"] = peak_wind(first_idx)
+        h6["wind_kmh"], h6["gust_kmh"] = peak_wind(second_idx)
+    except Exception as e:
+        print("Open-Meteo wind parse error:", e)
+        h3["wind_kmh"] = h3["gust_kmh"] = h6["wind_kmh"] = h6["gust_kmh"] = 0
+
     return {"h3": h3, "h6": h6}
 
 
@@ -392,6 +466,9 @@ def _parse_forecast(res: dict):
         rain_mm = round(rain_3h / 3, 2)
         rain = 1 if (rain_mm > 0 or condition in RAIN_CONDITIONS) else 0
 
+        wind = item.get("wind") or {}
+        wind_kmh = _kmh(wind.get("speed"))
+
         slots.append({
             "temp": item["main"]["temp"],
             "humidity": item["main"]["humidity"],
@@ -401,6 +478,8 @@ def _parse_forecast(res: dict):
             "dt": item.get("dt"),                          # unix time of the slot
             "condition": condition,
             "condition_id": w0.get("id", 800),
+            "wind_kmh": wind_kmh,
+            "gust_kmh": max(_kmh(wind.get("gust")), wind_kmh),
         })
 
     return {"h3": slots[0], "h6": slots[1]}
@@ -446,4 +525,4 @@ def get_forecast_by_city(city: str):
         data = _open_meteo_forecast(coords[0], coords[1])
         if data:
             return data
-    return _owm_forecast_by_coords(*coords) if False else _owm_forecast_by_city(city)
+    return _owm_forecast_by_city(city)
